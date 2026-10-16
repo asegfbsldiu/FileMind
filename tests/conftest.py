@@ -16,6 +16,24 @@ from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool
 from PySide6.QtWidgets import QApplication
 
 
+class ReversibleTestProtector:
+    """Deterministic stand-in for an OS token protector; never a real cipher."""
+
+    __test__ = False
+
+    def protect(self, data: bytes) -> bytes:
+        return bytes(value ^ 73 for value in data)
+
+    def unprotect(self, data: bytes) -> bytes:
+        return self.protect(data)
+
+
+@pytest.fixture
+def test_protector() -> ReversibleTestProtector:
+    """Let remember-unlock flows run on platforms without DPAPI."""
+    return ReversibleTestProtector()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def qt_application_lifecycle():
     """Destroy views before QApplication, including on assertion failures."""

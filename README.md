@@ -119,7 +119,7 @@ Orbit 首次发送消息前会单独询问授权。发送范围是你输入的�
 .\.venv\Scripts\python.exe -m compileall -q main.py filemind tests tools
 ```
 
-当前完整套件为 146 passed、24 subtests passed（约 30 秒；最近一次验收环境为 Python 3.13.15 + pytest 9.1.1）。同样这三条命令也会在 `.github/workflows/ci.yml` 中按 Windows、Ubuntu 和 macOS 三个平台 + Python 3.13 自动运行。
+当前完整套件为 147 passed、24 subtests passed（约 30 秒；最近一次验收环境为 Python 3.13.15 + pytest 9.1.1）。同样这三条命令也会在 `.github/workflows/ci.yml` 中按 Windows、Ubuntu 和 macOS 三个平台 + Python 3.13 自动运行。
 
 AI 测试使用 mock，不调用真实密钥或网络。Qt 集成测试使用 `QT_QPA_PLATFORM=offscreen` 和临时目录。
 

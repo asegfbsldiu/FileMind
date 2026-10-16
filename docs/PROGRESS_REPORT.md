@@ -8,7 +8,7 @@
 | --- | --- |
 | 分支 | `main`，最新提交 `e182529`，与 `origin/main` 同步 |
 | 持续集成 | 三平台矩阵（Windows / Ubuntu / macOS + Python 3.13），每次推送自动运行 |
-| 测试 | 140 个测试函数；`pytest` 报 **146 passed / 24 subtests passed**（约 30 秒） |
+| 测试 | 141 个测试函数；`pytest` 报 **147 passed / 24 subtests passed**（约 30 秒） |
 | 静态检查 | `compileall`、`pip check`、`pyflakes` 均无告警 |
 | 本地环境 | Python 3.13.15（`D:\python`）+ 项目虚拟环境 `D:\filemind\.venv`；已适配 Windows / macOS / Linux |
 

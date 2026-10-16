@@ -11,35 +11,24 @@ import pytest
 from filemind.storage.local_lock import LocalLockError, LocalLockStore, WindowsTokenProtector
 
 
-class TestProtector:
-    """Deterministic test double, deliberately not a production cipher."""
-
-    __test__ = False
-
-    def protect(self, data: bytes) -> bytes:
-        return bytes(value ^ 73 for value in data)
-
-    def unprotect(self, data: bytes) -> bytes:
-        return self.protect(data)
-
-
 @pytest.fixture
-def store(tmp_path: Path) -> LocalLockStore:
-    return LocalLockStore(tmp_path / "lock" / "auth.json", TestProtector())
+def store(tmp_path: Path, test_protector) -> LocalLockStore:
+    return LocalLockStore(tmp_path / "lock" / "auth.json", test_protector)
 
 
-def test_setup_reload_random_salt_and_no_plaintext(store: LocalLockStore, tmp_path: Path) -> None:
+def test_setup_reload_random_salt_and_no_plaintext(store: LocalLockStore, tmp_path: Path,
+                                                   test_protector) -> None:
     assert not store.is_configured()
     recovery = store.initialize("first password")
     record = store.path.read_text(encoding="utf-8")
     assert "first password" not in record
     assert recovery not in record
     assert len(recovery) == 32
-    reloaded = LocalLockStore(store.path, TestProtector())
+    reloaded = LocalLockStore(store.path, test_protector)
     assert reloaded.is_configured()
     assert reloaded.unlock("first password")
     assert not reloaded.unlock("wrong password")
-    second = LocalLockStore(tmp_path / "second" / "auth.json", TestProtector())
+    second = LocalLockStore(tmp_path / "second" / "auth.json", test_protector)
     second.initialize("first password")
     assert json.loads(record)["password"] != json.loads(second.path.read_text())["password"]
     with pytest.raises(LocalLockError, match="已经设置"):
@@ -86,11 +75,11 @@ def test_remember_expiry_tamper_and_explicit_lock(store: LocalLockStore) -> None
     assert not store.token_path.exists()
 
 
-def test_failed_attempts_have_persisted_cooldown(store: LocalLockStore) -> None:
+def test_failed_attempts_have_persisted_cooldown(store: LocalLockStore, test_protector) -> None:
     store.initialize("initial password")
     for _ in range(5):
         assert not store.unlock("incorrect password")
-    reloaded = LocalLockStore(store.path, TestProtector())
+    reloaded = LocalLockStore(store.path, test_protector)
     with pytest.raises(LocalLockError, match="等待"):
         reloaded.unlock("initial password")
     now = time.time()

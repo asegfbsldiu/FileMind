@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication, QDialog
 
@@ -11,8 +12,10 @@ from filemind.ui.startup import LocalLockController, authenticate
 from tools.review_ui import build_review
 
 
-def test_manual_lock_revokes_token_and_restores_same_window(tmp_path: Path) -> None:
+def test_manual_lock_revokes_token_and_restores_same_window(tmp_path: Path, test_protector) -> None:
+    """Exercise the revoke flow on every platform using an injected protector."""
     window, _ = build_review(tmp_path, "orbit")
+    window.lock_store.protector = test_protector
     window.lock_store.initialize("temporary test password", remember=True)
     assert window.lock_store.try_remembered_unlock()
     controller = LocalLockController(window, window.lock_store)
@@ -31,6 +34,19 @@ def test_manual_lock_revokes_token_and_restores_same_window(tmp_path: Path) -> N
         assert window.isVisible()
         assert not window.lock_store.try_remembered_unlock()
         assert window.page_stack.currentWidget() is window.assistant_page
+    window.close()
+
+
+def test_remember_unlock_is_refused_without_an_os_protector(tmp_path: Path) -> None:
+    """macOS and Linux have no DPAPI, so the option must refuse instead of pretending."""
+    window, _ = build_review(tmp_path, "orbit")
+    window.lock_store.protector = None
+
+    with pytest.raises(LocalLockError, match="无法安全记住解锁"):
+        window.lock_store.initialize("temporary test password", remember=True)
+
+    assert not window.lock_store.path.exists()
+    assert not window.lock_store.try_remembered_unlock()
     window.close()
 
 
