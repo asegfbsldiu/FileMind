@@ -40,7 +40,20 @@ jobs:
         run: python -m compileall -q main.py filemind tests tools
 
       - name: 运行测试
-        run: python -m pytest -q
+        shell: pwsh
+        run: |
+          $output = python -m pytest -q --tb=short -rf --durations=10 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $output | Set-Content -Path (Join-Path $env:RUNNER_TEMP 'pytest-output.txt') -Encoding utf8
+          Write-Output $output
+          if ($code -ne 0) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
+              '## pytest 失败输出', '', '```text', $output, '```')
+            Write-Error "pytest 失败，退出码 $code"
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value 'pytest 全部通过。'
+          }
+          exit $code
 
       - name: 校验打包元数据与入口点
         run: |
