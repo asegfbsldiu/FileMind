@@ -10,11 +10,6 @@ import tempfile
 import zipfile
 from pathlib import Path
 from threading import Event
-from typing import Callable
-
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QImage, QImageReader, QImageWriter, QPainter, QPdfWriter
-
 from filemind.conversion.models import ConversionInput, ConversionResult, ConversionTarget
 from filemind.conversion.base import ConversionError, Progress
 from filemind.conversion.images import RASTER_SUFFIXES, inspect_image, convert_image
@@ -40,30 +35,6 @@ def fingerprint(path: Path) -> tuple[int, int, int, int]:
 def _check_cancel(cancel: Event) -> None:
     if cancel.is_set():
         raise InterruptedError("转换已取消，未发布输出文件。")
-
-
-def _image_targets() -> tuple[ConversionTarget, ...]:
-    available = {bytes(item).decode().lower() for item in QImageWriter.supportedImageFormats()}
-    options = (("png", "PNG", ".png"), ("jpeg", "JPEG", ".jpg"), ("webp", "WebP", ".webp"),
-               ("bmp", "BMP", ".bmp"), ("tiff", "TIFF", ".tiff"))
-    return tuple(ConversionTarget(key, title, extension, "单帧图片；JPEG 会有损压缩，透明区域填白。")
-                 for key, title, extension in options if key in available) + (
-                     ConversionTarget("pdf", "图片 → 单页 PDF", ".pdf", "将图片置入一页 PDF，不提供 OCR 或可编辑文档。"),)
-
-
-def _image_reader(path: Path) -> QImageReader:
-    reader = QImageReader(str(path))
-    reader.setDecideFormatFromContent(True)
-    reader.setAutoTransform(True)
-    detected = bytes(reader.format()).lower()
-    if detected not in {b"png", b"jpeg", b"jpg", b"webp", b"bmp", b"gif", b"tiff"}:
-        raise ConversionError("无法识别这张图片的真实格式。")
-    size = reader.size()
-    if not size.isValid() or size.width() * size.height() > 32_000_000:
-        raise ConversionError("图片尺寸无效或超过 3200 万像素限制。")
-    if reader.imageCount() > 1 or (reader.supportsAnimation() and reader.imageCount() != 1):
-        raise ConversionError("暂不转换动图或多页图片，避免静默丢失帧或页面。")
-    return reader
 
 
 def inspect_input(source: Path) -> ConversionInput:
@@ -145,34 +116,6 @@ def _write_text(item: ConversionInput, key: str, staging: Path) -> None:
             value = json.loads(text)
             text = _json_to_csv(value) if key == "csv" else json.dumps(value, ensure_ascii=False, indent=2) + "\n"
     staging.write_bytes(text.encode("utf-16" if key == "utf16" else "utf-8"))
-
-
-def _write_image(item: ConversionInput, key: str, staging: Path) -> None:
-    image = _image_reader(item.path).read()
-    if image.isNull():
-        raise ConversionError("图片解码失败，未生成结果。")
-    if key == "pdf":
-        writer = QPdfWriter(str(staging))
-        painter = QPainter(writer)
-        if not painter.isActive():
-            raise ConversionError("无法建立 PDF 输出。")
-        try:
-            scale = min(writer.width() / image.width(), writer.height() / image.height())
-            painter.drawImage(QRectF(0, 0, image.width() * scale, image.height() * scale), image)
-        finally:
-            painter.end()
-        del writer
-        return
-    if key == "jpeg" and image.hasAlphaChannel():
-        background = QImage(image.size(), QImage.Format.Format_RGB32)
-        background.fill(Qt.GlobalColor.white)
-        painter = QPainter(background)
-        painter.drawImage(0, 0, image)
-        painter.end()
-        image = background
-    writer = QImageWriter(str(staging), key.encode("ascii"))
-    if not writer.write(image):
-        raise ConversionError("图片编码失败，请检查目标格式插件与磁盘权限。")
 
 
 def _write_zip(item: ConversionInput, staging: Path, progress: Progress, cancel: Event) -> None:

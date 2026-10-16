@@ -363,9 +363,10 @@ class OrganizePage(QWidget):
         self.ai_model_badge.setToolTip(message)
         self._update_mode()
 
-    def set_status(self, message: str) -> None:
+    def set_status(self, message: str, tooltip: str = "") -> None:
         """Show the current real task state without replacing the file list."""
         self.page_status.setText(message)
+        self.page_status.setToolTip(tooltip)
 
     def set_progress(self, completed: int, total: int) -> None:
         """Show measured scan or batch progress when a total is known."""

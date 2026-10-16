@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 
-from filemind.ai.providers import PROVIDER_BY_ID
 from filemind.chat_models import ChatConversation, ChatMessage
 from filemind.core.planner import build_plan
 from filemind.core.scanner import scan_files

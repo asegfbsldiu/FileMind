@@ -50,7 +50,6 @@ from filemind.ui.dialogs.plan_preview import PlanPreviewDialog
 from filemind.ui.styles.icons import svg_icon
 from filemind.ui.widgets.conversation_row import ConversationRow
 from filemind.ui.widgets.privacy_dialog import OrbitPrivacyDialog
-from filemind.core.classifier import classify_file
 from filemind.core.organization_presets import classify_with_preset
 from filemind.core.executor import ExecutionResult, execute_plan, undo_record
 from filemind.core.planner import build_plan
@@ -957,11 +956,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "部分 AI 建议未生成",
-                f"{len(failed_file_ids)} 个文件所在批次失败。预览中标为本地规则结果，存在失败标记时不能执行。\n"
+                f"{len(failed_file_ids)} 个文件所在批次失败。预览中标为本地规则结果，这些行在执行时会跳过。\n"
                 "请检查行内错误、修改规则或使用本地规则重新扫描。",
             )
             if self.organize_page.mode_combo.currentData() == "ai" and len(failed_file_ids) >= len(plan.operations):
-                self.organize_page.set_status("AI 未生成可用建议；当前仅显示带失败标记的规则结果，不能执行。")
+                self.organize_page.set_status("AI 未生成可用建议；当前所有行都会跳过，请修改规则后重试。")
                 return
         if plan.operations and open_preview:
             self._open_plan_preview()
@@ -991,14 +990,22 @@ class MainWindow(QMainWindow):
     def _confirm_execution(self, plan: object) -> None:
         if not isinstance(plan, OperationPlan) or self._history is None:
             return
-        warnings = [operation for operation in plan.operations if operation.warning]
-        if warnings:
-            QMessageBox.warning(self, "存在目标冲突", "预览中存在目标冲突。请重新扫描并解决后再执行。")
+        executable = [operation for operation in plan.operations
+                      if not operation.excluded and not operation.warning]
+        skipped = len(plan.operations) - len(executable)
+        if not executable:
+            QMessageBox.information(
+                self, "没有可执行的文件",
+                "预览中的文件都会被跳过。请修改分类、文件名，或取消勾选“执行”列后重试。")
             return
+        self.organize_page.set_plan(plan)
+        detail = f"即将移动 {len(executable)} 个文件到预览中的分类文件夹。"
+        if skipped:
+            detail += f"\n其中 {skipped} 项会跳过（目标冲突、符号链接或你排除的行），不会移动。"
         answer = QMessageBox.question(
             self,
             "确认整理文件",
-            f"即将移动 {len(plan.operations)} 个文件到预览中的分类文件夹。\n\n不会删除或覆盖文件，是否继续？",
+            f"{detail}\n\n不会删除或覆盖文件，是否继续？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1014,15 +1021,18 @@ class MainWindow(QMainWindow):
     def _execution_completed(self, result: object) -> None:
         if not isinstance(result, ExecutionResult):
             return
-        message = f"整理完成：成功 {result.succeeded} 项，失败 {result.failed} 项。"
+        counts = f"成功 {result.succeeded} 项，跳过 {result.skipped} 项，失败 {result.failed} 项。"
+        message = f"整理完成：{counts}"
         if result.cancelled:
-            message = f"任务已取消：成功 {result.succeeded} 项，失败 {result.failed} 项。"
+            message = f"任务已取消：{counts}"
         if result.failures:
             details = "\n".join(result.failures[:8])
             QMessageBox.warning(self, "部分文件未完成", f"{message}\n\n{details}")
-        self.organize_page.set_status(message)
-        self.organize_page.last_operation_label.setText(f"上次：{result.succeeded} 成功 / {result.failed} 失败")
-        self.organize_page.last_operation_label.setToolTip(message)
+        self.organize_page.set_status(message, "\n".join(result.skip_reasons[:8]))
+        self.organize_page.last_operation_label.setText(
+            f"上次：{result.succeeded} 成功 / {result.skipped} 跳过 / {result.failed} 失败")
+        self.organize_page.last_operation_label.setToolTip(
+            message if not result.skip_reasons else message + "\n" + "\n".join(result.skip_reasons[:8]))
         self.organize_page.last_operation_label.show()
         if self.organize_page.path_edit.text().strip():
             self.organize_page.clear_plan()

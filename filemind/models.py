@@ -63,6 +63,9 @@ class PlannedOperation:
     size_bytes: int
     modified_ns: int
     warning: str | None = None
+    excluded: bool = False
+    requested_name: str = ""
+    review_note: str = ""
 
 
 @dataclass(frozen=True)

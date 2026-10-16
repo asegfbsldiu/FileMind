@@ -19,11 +19,14 @@ MoveFile = Callable[[Path, Path], None]
 class ExecutionResult:
     """Summary of a confirmed organize or undo operation."""
 
-    def __init__(self, succeeded: int = 0, failed: int = 0, cancelled: bool = False):
+    def __init__(self, succeeded: int = 0, failed: int = 0, cancelled: bool = False,
+                 skipped: int = 0):
         self.succeeded = succeeded
         self.failed = failed
         self.cancelled = cancelled
+        self.skipped = skipped
         self.failures: list[str] = []
+        self.skip_reasons: list[str] = []
 
 
 def move_without_overwrite(source: Path, target: Path) -> None:
@@ -49,12 +52,14 @@ def execute_plan(
     on_progress: Callable[[int, int], None] | None = None,
     cancel_event: Event | None = None,
 ) -> ExecutionResult:
-    """Execute only a confirmed, still-safe plan and persist each result."""
+    """Execute only a confirmed, still-safe plan and persist each result.
+
+    A row that cannot run safely (explicitly excluded, flagged during preview, or whose
+    destination appeared in the meantime) is skipped instead of aborting the batch, so
+    one conflict never blocks the remaining files.
+    """
     if not confirmed:
         return ExecutionResult(cancelled=True)
-    conflicts = [operation for operation in plan.operations if operation.target.exists() or operation.target.is_symlink()]
-    if conflicts:
-        raise FileExistsError("目标文件已存在，请重新扫描后处理冲突：" + ", ".join(op.target.name for op in conflicts))
 
     record = OperationRecord.create(uuid4().hex, plan.root)
     history.save(record)
@@ -67,15 +72,35 @@ def execute_plan(
         entry = _operation_entry(operation)
         record.operations.append(entry)
         history.save(record)
-        failure = _execute_one(plan.root, operation, entry, record, history, move_file)
-        if failure:
-            result.failures.append(failure)
-            result.failed += 1
+        skip_reason = _skip_reason(operation)
+        if skip_reason is not None:
+            entry.update(status="skipped", skip_reason=skip_reason)
+            history.save(record)
+            result.skipped += 1
+            result.skip_reasons.append(f"{operation.source.name}：{skip_reason}")
         else:
-            result.succeeded += 1
+            failure = _execute_one(plan.root, operation, entry, record, history, move_file)
+            if failure:
+                result.failures.append(failure)
+                result.failed += 1
+            else:
+                result.succeeded += 1
         if on_progress:
             on_progress(index, total)
     return result
+
+
+def _skip_reason(operation: PlannedOperation) -> str | None:
+    """Return why this row must not run, without touching the filesystem."""
+    if operation.excluded:
+        return "已在预览中排除"
+    if operation.warning:
+        return operation.warning
+    if operation.target.is_symlink():
+        return "目标路径是符号链接，不能执行"
+    if operation.target.exists():
+        return "目标位置已存在同名文件，已跳过"
+    return None
 
 
 def undo_record(
@@ -201,6 +226,7 @@ def _operation_entry(operation: PlannedOperation) -> dict[str, object]:
         "modified_ns": operation.modified_ns,
         "status": "pending",
         "error": "",
+        "skip_reason": "",
     }
 
 
@@ -211,9 +237,8 @@ def _validate_move_paths(root: Path, source: Path, target: Path, undo: bool = Fa
     validate_file_name(target.name)
     if target.is_symlink():
         raise ValueError(f"目标路径是符号链接：{target}")
-    resolved_source = source.resolve(strict=True)
     resolved_root = root.resolve(strict=True)
-    if not resolved_source.is_relative_to(resolved_root):
+    if not source.resolve(strict=True).is_relative_to(resolved_root):
         raise ValueError(f"源文件超出所选目录：{source}")
     if not _safe_directory_chain(resolved_root, source.parent):
         raise ValueError(f"源路径包含符号链接目录：{source}")

@@ -11,7 +11,7 @@ from openai import NotFoundError, OpenAI, RateLimitError
 
 from filemind.ai.prompts import SYSTEM_PROMPT, build_organize_prompt
 from filemind.ai.response import parse_file_suggestions
-from filemind.ai.schemas import AIBatchFailure, AIFileMetadata, AIOrganizationResult, file_metadata
+from filemind.ai.schemas import AIBatchFailure, AIFileMetadata, AIOrganizationResult
 from filemind.ai.base import ProgressCallback
 from filemind.models import FileInfo, FileSuggestion
 from filemind.storage.settings import AISettings

@@ -1,6 +1,5 @@
 """Local FFmpeg adapters with explicit demuxers, codecs and cancellation."""
 
-import re
 import shutil
 import subprocess
 import tempfile

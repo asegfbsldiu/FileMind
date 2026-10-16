@@ -13,7 +13,7 @@ from PySide6.QtCore import QEventLoop, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QFrame, QMessageBox
 
 from filemind.ui.main_window import MainWindow
-from filemind.ai.schemas import AIOrganizationResult, file_metadata
+from filemind.ai.schemas import AIOrganizationResult
 from filemind.models import FileSuggestion
 from filemind.storage.settings import AISettings
 from filemind.storage.settings import SettingsStore

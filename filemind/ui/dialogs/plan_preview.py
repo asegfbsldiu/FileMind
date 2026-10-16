@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QModelIndex, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
 )
 
 from filemind.models import OperationPlan
-from filemind.ui.widgets.file_table import CategoryDelegate, FilePlanTableModel
+from filemind.ui.widgets.file_table import (CategoryDelegate, EXECUTE_COLUMN, FilePlanTableModel,
+                                            STATUS_COLUMN)
 from filemind.ui.widgets.plan_tree import KIND_ROLE, PATH_ROLE, PlanTargetTree
 from filemind.ui.widgets.plan_filter import PlanFilterModel
 
@@ -48,6 +49,8 @@ class PlanPreviewDialog(QDialog):
         self.source_model = source_model
         self.proxy_model = PlanFilterModel(self)
         self.proxy_model.setSourceModel(source_model)
+        self.source_model.plan_changed.connect(self._plan_edited)
+        self.source_model.edit_rejected.connect(self._edit_rejected)
         self._build_ui()
         self._filter_table(self.tree.currentItem(), None)
 
@@ -57,11 +60,11 @@ class PlanPreviewDialog(QDialog):
         layout.setSpacing(12)
         self._build_header(layout)
         self._build_toolbar(layout)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
         self.tree = PlanTargetTree(self.plan)
         self.tree.currentItemChanged.connect(self._filter_table)
-        splitter.addWidget(self.tree)
+        self.splitter.addWidget(self.tree)
         self._build_table()
         self._build_details_panel()
         detail_panel = QWidget()
@@ -70,25 +73,22 @@ class PlanPreviewDialog(QDialog):
         detail_layout.setSpacing(10)
         detail_layout.addWidget(self.table, 1)
         detail_layout.addWidget(self.details_frame)
-        splitter.addWidget(detail_panel)
-        splitter.setSizes((350, 680))
-        layout.addWidget(splitter, 1)
+        self.splitter.addWidget(detail_panel)
+        self.splitter.setSizes((350, 680))
+        layout.addWidget(self.splitter, 1)
         self._build_actions(layout)
+        self._update_summary()
 
     def _build_header(self, layout: QVBoxLayout) -> None:
-        header = QLabel(f"本次整理涉及 {len(self.plan.operations)} 个文件")
-        header.setObjectName("PreviewTitle")
-        layout.addWidget(header)
-        warning_count = sum(bool(item.warning) for item in self.plan.operations)
-        summary = QLabel(f"{len(self.plan.operations) - warning_count} 项本地校验通过    "
-                         f"{warning_count} 项异常或冲突    尚未执行任何文件操作")
-        summary.setObjectName("Muted")
-        summary.setWordWrap(True)
-        layout.addWidget(summary)
-        self.notice = QLabel(self._notice_text(warning_count) if self.plan.operations
-                             else "这个计划没有需要整理的文件。可以关闭后选择其他目录。")
+        self.header = QLabel(f"本次整理涉及 {len(self.plan.operations)} 个文件")
+        self.header.setObjectName("PreviewTitle")
+        layout.addWidget(self.header)
+        self.summary = QLabel()
+        self.summary.setObjectName("Muted")
+        self.summary.setWordWrap(True)
+        layout.addWidget(self.summary)
+        self.notice = QLabel("这个计划没有需要整理的文件。可以关闭后选择其他目录。")
         self.notice.setObjectName("PreviewNotice")
-        self.notice.setProperty("hasWarnings", warning_count > 0)
         self.notice.setWordWrap(True)
         self.notice.setVisible(True)
         layout.addWidget(self.notice)
@@ -119,15 +119,18 @@ class PlanPreviewDialog(QDialog):
         self.table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.table.verticalHeader().setDefaultSectionSize(38)
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(QTableView.EditTrigger.DoubleClicked
+                                   | QTableView.EditTrigger.EditKeyPressed)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setMinimumSectionSize(100)
         for column in (0, 1, 5):
             self.table.setColumnHidden(column, True)
-        for column, width in ((2, 145), (3, 145), (4, 80), (6, 60), (7, 125)):
+        for column, width in ((2, 145), (3, 145), (4, 80), (6, 60), (STATUS_COLUMN, 165)):
             self.table.setColumnWidth(column, width)
+        self.table.setColumnWidth(EXECUTE_COLUMN, 62)
         self.table.selectionModel().currentRowChanged.connect(self._show_selected_details)
+        self.table.clicked.connect(self._toggle_excluded)
 
     def _build_details_panel(self) -> None:
         self.details_frame = QFrame()
@@ -153,11 +156,70 @@ class PlanPreviewDialog(QDialog):
         form.addRow(title, label)
         return label
 
-    @staticmethod
-    def _notice_text(warning_count: int) -> str:
-        if warning_count:
-            return f"有 {warning_count} 项校验异常或冲突。异常项会显示原因，解决并重新扫描后才能执行。"
-        return "请检查原路径、目标位置和命名建议。确认后才会执行移动或重命名。"
+    def _update_summary(self) -> None:
+        """Reflect the current rows, including skips the user just created."""
+        operations = self.source_model.operations
+        executable = [item for item in operations if not item.excluded and not item.warning]
+        skipped = [item for item in operations if item.excluded or item.warning]
+        self.header.setText(f"本次整理涉及 {len(operations)} 个文件")
+        self.summary.setText(f"{len(executable)} 项将执行    {len(skipped)} 项将跳过    "
+                             "尚未执行任何文件操作")
+        self.notice.setText(self._notice_text(len(skipped), len(executable)))
+        self.notice.setProperty("hasWarnings", bool(skipped))
+        self._refresh_notice_style()
+        self.execute_button.setEnabled(bool(executable))
+
+    def _refresh_notice_style(self) -> None:
+        """Re-apply the notice styling after its warning property changed."""
+        style = self.notice.style()
+        style.unpolish(self.notice)
+        style.polish(self.notice)
+
+    def _notice_text(self, skipped: int, executable: int) -> str:
+        if not self.source_model.operations:
+            return "这个计划没有需要整理的文件。可以关闭后选择其他目录。"
+        if not executable:
+            return "所有行都会被跳过，没有可执行的文件。可以重新扫描或修改规则后再试。"
+        if skipped:
+            return (f"有 {skipped} 项会跳过（目标冲突、符号链接或你排除的行），其余 {executable} 项照常处理。"
+                    "取消勾选“执行”列可以跳过某一行，双击分类或文件名可以修改建议。")
+        return "请检查原路径、目标位置和命名建议。双击分类或文件名可直接修改；确认后才会执行移动或重命名。"
+
+    def _plan_edited(self) -> None:
+        """Rebuild the destination tree and summary after one accepted edit."""
+        current = self.source_model.current_plan()
+        if current is not None:
+            self.plan = current
+        self.notice.setToolTip("")
+        self._rebuild_tree()
+        self._update_summary()
+
+    def _edit_rejected(self, message: str) -> None:
+        """Explain a refused edit; the row keeps its previous valid value."""
+        self.notice.setText(f"这次修改没有应用：{message}")
+        self.notice.setProperty("hasWarnings", True)
+        self._refresh_notice_style()
+        self.notice.setToolTip(message)
+
+    def _rebuild_tree(self) -> None:
+        """Replace the tree in place so the splitter position is preserved."""
+        previous = self.tree
+        position = self.splitter.indexOf(previous)
+        self.tree = PlanTargetTree(self.plan)
+        self.tree.currentItemChanged.connect(self._filter_table)
+        replaced = self.splitter.replaceWidget(max(position, 0), self.tree)
+        if replaced is not None:
+            replaced.deleteLater()
+        self.tree.expandToDepth(1)
+        self._filter_table(self.tree.currentItem(), None)
+
+    def _toggle_excluded(self, index: QModelIndex) -> None:
+        """Let one click in the 执行 column skip or restore that row."""
+        if index.column() != EXECUTE_COLUMN:
+            return
+        current = index.data(Qt.ItemDataRole.CheckStateRole)
+        target = Qt.CheckState.Unchecked if current == Qt.CheckState.Checked else Qt.CheckState.Checked
+        self.source_model.setData(index, target, Qt.ItemDataRole.CheckStateRole)
 
     def _build_actions(self, layout: QVBoxLayout) -> None:
         actions = QHBoxLayout()
@@ -167,9 +229,8 @@ class PlanPreviewDialog(QDialog):
         self.close_button.clicked.connect(self.reject)
         self.execute_button = QPushButton("确认并整理")
         self.execute_button.setObjectName("PrimaryButton")
-        can_execute = bool(self.plan.operations) and not any(item.warning for item in self.plan.operations)
-        self.execute_button.setEnabled(can_execute)
-        self.execute_button.setToolTip("仍会再次显示执行确认，并使用本地安全执行器。")
+        self.execute_button.setEnabled(False)
+        self.execute_button.setToolTip("跳过的行不会移动任何文件；确认后仍会再次校验并使用本地安全执行器。")
         self.execute_button.clicked.connect(self._request_execution)
         actions.addWidget(self.rescan_button)
         actions.addStretch(1)
@@ -213,9 +274,12 @@ class PlanPreviewDialog(QDialog):
         self.detail_target.setToolTip(str(operation.target))
 
     def _request_execution(self) -> None:
-        if not self.plan.operations or any(item.warning for item in self.plan.operations):
+        plan = self.source_model.current_plan()
+        if plan is None:
             return
-        self.execute_requested.emit(self.plan)
+        if not any(not item.excluded and not item.warning for item in plan.operations):
+            return
+        self.execute_requested.emit(plan)
         self.accept()
 
     def _request_rescan(self) -> None:
