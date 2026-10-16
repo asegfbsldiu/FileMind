@@ -141,9 +141,14 @@ class LocalLockDialog(QDialog):
         self.show_password = QCheckBox("显示密码")
         self.show_password.toggled.connect(self._toggle_password)
         layout.addWidget(self.show_password)
-        self.remember_checkbox = QCheckBox("在此 Windows 用户下记住解锁 7 天")
-        self.remember_checkbox.setToolTip("保存 DPAPI 保护的随机令牌，不保存密码；手动锁定或修改密码会撤销。")
-        self.remember_checkbox.setEnabled(self.store.protector is not None)
+        remembers = self.store.protector is not None
+        self.remember_checkbox = QCheckBox("在此用户下记住解锁 7 天" if remembers
+                                           else "当前系统不支持安全记住解锁")
+        self.remember_checkbox.setToolTip(
+            "保存由系统凭据保护（Windows DPAPI）的随机令牌，不保存密码；手动锁定或修改密码会撤销。"
+            if remembers else
+            "安全记住解锁依赖 Windows DPAPI。当前系统请每次输入密码；API Key 可用环境变量或本机明文配置提供。")
+        self.remember_checkbox.setEnabled(remembers)
         layout.addWidget(self.remember_checkbox)
 
     @staticmethod

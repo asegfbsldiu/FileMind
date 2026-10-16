@@ -1,6 +1,7 @@
 """Central color, typography, spacing, and Qt stylesheet tokens."""
 
 import os
+import sys
 from pathlib import Path
 
 from PySide6.QtGui import QFont, QFontDatabase
@@ -37,17 +38,36 @@ def apply_theme(application: QApplication) -> None:
 def _preferred_font_family(application: QApplication) -> str:
     """Choose an installed Chinese-capable font before Latin-only fallbacks."""
     available = set(QFontDatabase.families())
-    font_directory = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
-    for filename in ("msyh.ttc", "Noto Sans SC (TrueType).otf", "Deng.ttf", "simsun.ttc"):
-        font_path = font_directory / filename
+    for font_path in _candidate_font_files():
         if font_path.is_file():
             font_id = QFontDatabase.addApplicationFont(str(font_path))
             if font_id >= 0:
                 available.update(QFontDatabase.applicationFontFamilies(font_id))
-    for candidate in ("Microsoft YaHei UI", "Noto Sans SC", "DengXian", "SimSun", "Segoe UI"):
+    for candidate in _FONT_FAMILIES:
         if candidate in available:
             return candidate
     return application.font().family()
+
+
+_FONT_FAMILIES = ("Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+                  "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "WenQuanYi Zen Hei",
+                  "DengXian", "SimSun", "Segoe UI", "Helvetica Neue", "Noto Sans", "DejaVu Sans")
+
+
+def _candidate_font_files() -> tuple[Path, ...]:
+    """List per-platform font files that carry Simplified Chinese glyphs."""
+    if os.name == "nt":
+        root = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+        return tuple(root / name for name in ("msyh.ttc", "Deng.ttf", "simsun.ttc"))
+    if sys.platform == "darwin":
+        return (Path("/System/Library/Fonts/PingFang.ttc"),
+                Path("/System/Library/Fonts/STHeiti Light.ttc"),
+                Path("/Library/Fonts/Arial Unicode.ttf"))
+    return (Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf"),
+            Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+            Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+            Path("/usr/share/fonts/truetype/arphic/uming.ttc"))
 
 
 def _stylesheet(font_family: str) -> str:

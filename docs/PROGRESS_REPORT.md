@@ -7,10 +7,10 @@
 | 项目 | 状态 |
 | --- | --- |
 | 分支 | `main`，最新提交 `e182529`，与 `origin/main` 同步 |
-| 持续集成 | 通过：[Windows / Python 3.13 运行](https://github.com/asegfbsldiu/FileMind/actions/runs/38847759176)，约 1.2 分钟 |
-| 测试 | 135 个测试函数；`pytest` 报 **141 passed / 24 subtests passed**（约 30 秒） |
+| 持续集成 | 三平台矩阵（Windows / Ubuntu / macOS + Python 3.13），每次推送自动运行 |
+| 测试 | 140 个测试函数；`pytest` 报 **146 passed / 24 subtests passed**（约 30 秒） |
 | 静态检查 | `compileall`、`pip check`、`pyflakes` 均无告警 |
-| 本地环境 | Python 3.13.15（`D:\python`）+ 项目虚拟环境 `D:\filemind\.venv` |
+| 本地环境 | Python 3.13.15（`D:\python`）+ 项目虚拟环境 `D:\filemind\.venv`；已适配 Windows / macOS / Linux |
 
 ## 二、本次做了什么
 
@@ -55,6 +55,17 @@
 
 这两块当时已通过全部测试（144 passed），但缺少专门的抽取单测与真实文件验证，因此按你的要求先不纳入。需要时执行 `git merge wip/content-and-recursion` 即可恢复。
 
+### 7. 跨平台适配
+
+- 新增 `filemind/storage/paths.py`：配置与数据目录按平台惯例，Windows 继续用 `%APPDATA%`（配置）与 `%LOCALAPPDATA%`（数据），macOS 统一用 `~/Library/Application Support/FileMind`，Linux 遵循 XDG 规范并支持 `XDG_CONFIG_HOME`/`XDG_DATA_HOME`；四个存储模块（设置、会话历史、工作区偏好、本机锁屏）改为共用这一个实现。目录决策逻辑写成可注入平台的纯函数，五个分支在三平台 CI 上都会被覆盖。
+- 中文字体候选按平台展开：Windows（微软雅黑/等线/宋体）、macOS（苹方/冬青黑体）、Linux（Noto Sans CJK/文泉驿/AR PL UMing），并补充了对应家族名回退。
+- 本就存在的平台分支经复核保留：凭据存储（非 Windows 返回不可用并回退到环境变量或用户显式选择的明文文件）、DPAPI 记住解锁、系统关联图标、`os.rename` 与 `os.link` 两种移动实现、icacls 与 chmod 0600 两种权限收紧方式。
+- 锁屏对话框在缺少 DPAPI 的系统上不再显示"在此 Windows 用户下记住解锁"，改为禁用并说明"当前系统不支持安全记住解锁"，避免给出无法兑现的承诺。
+- LibreOffice 探测补充 macOS 应用包、`/usr/lib/libreoffice` 与 snap 路径。
+- CI 从单一 Windows 作业改为三平台矩阵，Linux 作业按官方依赖安装 Qt 运行库（libegl1、libxkbcommon-x11、xcb 系列、libfontconfig1 等）与 `fonts-noto-cjk`。
+
+跨平台能力的边界：Windows 仍是主要验证与使用目标；macOS/Linux 上可通过 CI 证明代码路径与界面渲染可用，但没有在真实桌面会话里人工验收过长时间运行、系统托盘、多显示器等场景。“记住解锁 7 天”与系统凭据存储目前只有 Windows 实现。
+
 ## 三、如何运行
 
 ```powershell
@@ -66,7 +77,16 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
+```bash
+# macOS / Linux 等价命令
+python3.13 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python main.py
+```
+
 首次启动会要求设置本机密码（至少 8 位）并显示一次性恢复码；解锁后才加载工作区。之后在“设置”页填写服务商、Base URL、模型名称和 API Key（密钥默认存进 Windows 凭据管理器），“测试连接”会真实请求服务商并可能产生少量费用。
+
+非 Windows 系统没有可用的系统凭据存储，请在设置页勾选“本机配置文件明文保存”（文件权限 0600）或改用环境变量；解锁页的“记住解锁 7 天”也只在 Windows 上可用。
 
 日常使用的顺序是：选择目录 → 读取文件 → 选择分类方式并填写规则 → 生成建议 → 打开预览逐条核对/修改 → 确认执行 → 在“整理历史”里查看或撤销。
 
@@ -95,9 +115,9 @@ CI 是最终裁判：任何推送到 `main` 的提交都会在 GitHub 上按 Win
 
 ## 五、验证到什么程度，没有验证什么
 
-已经验证：单元与集成测试全绿；`compileall`、`pip check`、`pyflakes` 无告警；用离屏渲染生成了整理页、预览页、Orbit、格式转换、设置、锁屏等界面截图并人工核对；`main.py` 真实启动后停在首次设置界面未崩溃；GitHub Actions 在 `e182529` 上通过。
+已经验证：单元与集成测试在 Windows 本机全绿；`compileall`、`pip check`、`pyflakes` 无告警；用离屏渲染生成了整理页、预览页、Orbit、格式转换、设置、锁屏等界面截图并人工核对；`main.py` 真实启动后停在首次设置界面未崩溃；GitHub Actions 在 Windows、Ubuntu 和 macOS 三个平台上运行同一套检查。
 
-还没有验证：没有发起任何真实模型请求（AI 相关测试全部使用 mock，`测试连接` 需你自己填 Key 后实测）；没有对真实目录执行过整理或撤销；没有在数万文件规模、多显示器或非 100% 缩放下做人工验收；Office 排版转换依赖系统另行安装 LibreOffice，音视频转换依赖 FFmpeg（本项目由 imageio-ffmpeg 自带）。
+还没有验证：没有发起任何真实模型请求（AI 相关测试全部使用 mock，`测试连接` 需你自己填 Key 后实测）；没有对真实目录执行过整理或撤销；macOS 与 Linux 只由 CI 的自动化测试覆盖，没有在真实桌面会话里人工使用过，也没有测试多显示器、系统缩放或长时间运行；Office 排版转换依赖系统另行安装 LibreOffice，音视频转换依赖 FFmpeg（本项目由 imageio-ffmpeg 自带）。
 
 ## 六、已知限制
 

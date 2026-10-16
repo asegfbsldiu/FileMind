@@ -26,6 +26,11 @@ def office_binary() -> str | None:
         candidate = Path(root) / "LibreOffice/program/soffice.exe" if root else None
         if candidate and candidate.is_file():
             return str(candidate)
+    for candidate in (Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"),
+                      Path("/usr/lib/libreoffice/program/soffice"),
+                      Path("/snap/bin/libreoffice")):
+        if candidate.is_file():
+            return str(candidate)
     return None
 
 

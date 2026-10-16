@@ -1,6 +1,6 @@
 # FileMind 文件整理助手
 
-FileMind 是一个 Python + PySide6 Windows 桌面文件整理工具。它可用本地规则分类，也可调用配置好的 OpenAI Chat Completions 兼容服务生成分类、相对目标子目录和可选改名建议。所有建议都要经过本地安全校验并由用户确认后，才会交给本地执行器。
+FileMind 是一个 Python + PySide6 桌面文件整理工具，可在 Windows、macOS 和 Linux 上运行（Windows 是主要验证目标）。它可用本地规则分类，也可调用配置好的 OpenAI Chat Completions 兼容服务生成分类、相对目标子目录和可选改名建议。所有建议都要经过本地安全校验并由用户确认后，才会交给本地执行器。
 
 ## 当前功能
 
@@ -21,7 +21,7 @@ FileMind 是一个 Python + PySide6 Windows 桌面文件整理工具。它可用
 
 ## 安装与启动
 
-需要 Python 3.13；当前界面、本机锁屏和转换后端在 Windows 下验证。运行依赖见 `requirements.txt`：PySide6 Essentials、OpenAI SDK、Pillow、pypdfium2、PyYAML、python-docx、openpyxl、python-pptx、defusedxml、imageio-ffmpeg。
+需要 Python 3.13。运行依赖见 `requirements.txt`：PySide6 Essentials、OpenAI SDK、Pillow、pypdfium2、PyYAML、python-docx、openpyxl、python-pptx、defusedxml、imageio-ffmpeg。
 
 推荐使用项目内的独立虚拟环境，避免污染系统解释器：
 
@@ -31,7 +31,28 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
+```bash
+# macOS / Linux：命令等价，只是路径不同
+python3.13 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python main.py
+```
+
 如果本机没有 `py` 启动器，把 `py -3.13` 换成 Python 3.13 解释器的完整路径。也可以直接安装本仓库：`pip install -e .`（元数据在 `pyproject.toml`，同时提供指向 `filemind.ui.main_window:main` 的 `filemind` 命令）。
+
+### 跨平台支持
+
+CI 在 Windows、Ubuntu 和 macOS 上运行同一套检查和测试；三端的差异只集中在少数系统集成点上：
+
+| 能力 | Windows | macOS / Linux |
+| --- | --- | --- |
+| 界面、整理流程、格式转换、Orbit 对话 | 支持 | 支持（Linux 需要 Qt 运行所需的系统库，CI 已按官方依赖列表安装） |
+| 中文字体 | 依次尝试微软雅黑、等线、宋体 | 依次尝试苹方、冬青黑体、Noto Sans CJK、文泉驿 |
+| 文件类型图标 | 使用系统关联图标 | 使用内置矢量图标，不调用系统外壳 |
+| 配置与数据目录 | `%APPDATA%\FileMind`、`%LOCALAPPDATA%\FileMind` | macOS 用 `~/Library/Application Support/FileMind`；Linux 遵循 XDG（`~/.config/FileMind`、`~/.local/share/FileMind`，可用 `XDG_CONFIG_HOME`/`XDG_DATA_HOME` 覆盖） |
+| “记住解锁 7 天” | 支持（DPAPI 保护的随机令牌） | 不支持；解锁页会禁用该选项并说明原因，需每次输入密码 |
+| API Key 存储 | 默认 Windows 凭据管理器 | 没有系统凭据存储可用；使用环境变量或显式勾选本机明文保存（权限 0600） |
+| 移动文件 | `os.rename`（同一目录树内） | 先 `os.link` 再删除源文件，失败会回滚，同样不覆盖 |
 
 ## 本机密码与锁屏
 
@@ -75,9 +96,9 @@ py -3.13 -m venv .venv
 
 首次使用时默认选择 DeepSeek，Base URL 为 `https://api.deepseek.com`，模型 ID 为 `deepseek-flash`（官方显示名 DeepSeek-V4.1-Flash）。API Key 不预置；请在“设置”中填写自己的密钥。首次配置不会覆盖用户已保存的 provider profile。也可以选择 OpenAI、硅基流动、阿里云百炼或自定义兼容接口。可以修改 Base URL、模型名称、请求超时和 API Key。预设只提供建议值；模型是否对账户开放取决于服务商、区域和账户权限。兼容性以 Chat Completions 为目标，不支持只提供 Responses API 或专有请求格式的服务。
 
-API Key 默认保存在 Windows Credential Manager；普通配置写入当前用户 `%APPDATA%/FileMind/settings.json`。切换服务商后需保存配置。环境变量可按 provider 设置：`DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`SILICONFLOW_API_KEY`、`DASHSCOPE_API_KEY` 或 `FILEMIND_API_KEY`。密钥读取优先级为：Windows 凭据管理器 → 用户明确选择的本地密钥文件 → provider 环境变量 → 旧版项目 `.env` 中的 `DEEPSEEK_API_KEY`（仅 DeepSeek）。设置页会显示密钥来源；`.env.example` 仅为空占位，不会自动加载。
+API Key 默认保存在 Windows Credential Manager；普通配置写入当前用户的 FileMind 配置目录（Windows 为 `%APPDATA%/FileMind`，macOS 为 `~/Library/Application Support/FileMind`，Linux 为 `~/.config/FileMind`）。切换服务商后需保存配置。环境变量可按 provider 设置：`DEEPSEEK_API_KEY`、`OPENAI_API_KEY`、`SILICONFLOW_API_KEY`、`DASHSCOPE_API_KEY` 或 `FILEMIND_API_KEY`。密钥读取优先级为：系统凭据存储 → 用户明确选择的本地密钥文件 → provider 环境变量 → 旧版项目 `.env` 中的 `DEEPSEEK_API_KEY`（仅 DeepSeek）。设置页会显示密钥来源；`.env.example` 仅为空占位，不会自动加载。
 
-如果没有可用系统凭据存储，用户可显式勾选“本机配置文件明文保存”。该文件位于用户应用数据目录之外的 FileMind 配置目录，并尝试限制为当前用户访问；明文保存存在风险，不推荐开启。密钥不会写入普通设置、操作历史、源码或错误提示。
+如果没有可用系统凭据存储（macOS 与 Linux 属于这种情况），用户可显式勾选“本机配置文件明文保存”。该文件位于 FileMind 配置目录，Windows 下限制为当前用户，其他系统设为 0600；明文保存存在风险，不推荐开启。密钥不会写入普通设置、操作历史、源码或错误提示。
 
 第一次生成在线 AI 预览前会询问授权。发送字段包括文件名、扩展名、大小、修改时间和用户规则；不会发送文件正文、整个文件夹或绝对路径。请求需要联网，在线 AI 不是离线功能。每次连接测试都会真实请求所选服务商，可能产生少量 token 费用；没有真实服务配置时不要把 mock 测试结果当作连接成功。
 
@@ -98,7 +119,7 @@ Orbit 首次发送消息前会单独询问授权。发送范围是你输入的�
 .\.venv\Scripts\python.exe -m compileall -q main.py filemind tests tools
 ```
 
-当前完整套件为 141 passed、24 subtests passed（约 28 秒；最近一次验收环境为 Python 3.13.15 + pytest 9.1.1）。同样这三条命令在 `.github/workflows/ci.yml` 中按 Windows + Python 3.13 自动运行。
+当前完整套件为 146 passed、24 subtests passed（约 30 秒；最近一次验收环境为 Python 3.13.15 + pytest 9.1.1）。同样这三条命令也会在 `.github/workflows/ci.yml` 中按 Windows、Ubuntu 和 macOS 三个平台 + Python 3.13 自动运行。
 
 AI 测试使用 mock，不调用真实密钥或网络。Qt 集成测试使用 `QT_QPA_PLATFORM=offscreen` 和临时目录。
 
@@ -121,7 +142,7 @@ filemind/
   ai/          服务接口、provider 预设、提示词、结构化校验、OpenAI SDK 适配
   core/        扫描、分类、组织预设、整理计划安全校验、执行与撤销
   conversion/  本地格式识别、转换能力与安全输出（图片、文本、PDF、Office、音视频）
-  storage/     操作历史、普通设置、Windows 凭据存储、本机锁屏、工作区偏好
+  storage/     操作历史、普通设置、跨平台目录、Windows 凭据存储、本机锁屏、工作区偏好
   ui/          PySide6 页面、模型视图、后台任务
 tests/         核心、AI、设置持久化、锁屏及 UI 集成测试
 tools/         review_ui.py 隔离界面检查与截图
@@ -135,7 +156,8 @@ pyproject.toml 包元数据、入口点与开发依赖
 - 只支持 OpenAI Chat Completions 兼容接口；每个模型与服务商配置仍需使用“测试连接”实测。
 - 第一版只将元数据作为 AI 输入，无法理解文件正文；转换页已有的文本抽取能力尚未接入 AI 分类。模型给出的语义分类质量无法由本地保证。
 - 预览只能修改分类、分类下的相对子目录和新文件名，不能把某一行移动到任意位置；重名目标由本地自动追加序号，用户不能自行指定冲突处理方式。
-- Windows 凭据管理器是推荐密钥存储；明文本地存储只能作为用户明确选择的降级方案。
+- Windows 凭据管理器是 v1 实现的唯一系统凭据存储；macOS 与 Linux 需要环境变量或用户明确选择的明文文件，未接入 Keychain/SecretService。
+- “记住解锁 7 天”依赖 Windows DPAPI，其他系统不提供该选项；锁屏功能本身三平台都可用。
 - 仅处理所选目录第一层，不递归扫描。撤销基于文件大小和修改时间检查，无法识别同时恢复这两项属性的内容改写。
 - Office 排版转换依赖本机 LibreOffice，音视频转换依赖 FFmpeg，两者都不随项目分发，也未在 CI 中验证。
 - 操作历史写在被整理目录的 `.filemind/history/` 内，目录被移动或改名后历史不会跟随。

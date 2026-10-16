@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import RLock
 
 from filemind.chat_models import ChatConversation, ChatMessage
+from filemind.storage.paths import config_dir
 
 
 MAX_CONVERSATIONS = 50
@@ -104,9 +105,7 @@ class ChatHistoryStore:
 
 
 def _default_history_path() -> Path:
-    app_data = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
-    root = Path(app_data) if app_data else Path.home() / ".config"
-    return root / "FileMind" / "chat_history.json"
+    return config_dir() / "chat_history.json"
 
 
 def _conversation_title(current: str, role: str, content: str) -> str:

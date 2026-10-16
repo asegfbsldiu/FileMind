@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Protocol, cast
 
+from filemind.storage.paths import data_dir
+
 
 ITERATIONS = 600_000
 REMEMBER_SECONDS = 7 * 24 * 3600
@@ -122,8 +124,7 @@ class LocalLockStore:
     """Keep password verifiers separate from all model/API settings."""
 
     def __init__(self, path: Path | None = None, protector: TokenProtector | None = None) -> None:
-        appdata = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share"))
-        self.path = path or appdata / "FileMind" / "lock" / "auth.json"
+        self.path = path or data_dir() / "lock" / "auth.json"
         self.token_path = self.path.with_name("remember_unlock.bin")
         self.protector = protector or (WindowsTokenProtector() if os.name == "nt" else None)
 

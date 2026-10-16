@@ -10,18 +10,31 @@ permissions:
   contents: read
 
 jobs:
-  windows:
-    name: Windows / Python 3.13
-    runs-on: windows-latest
-    timeout-minutes: 20
+  test:
+    name: ${{ matrix.os }} / Python 3.13
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows 是主要验证目标；Linux 与 macOS 用来覆盖跨平台回退路径。
+        os: [windows-latest, ubuntu-latest, macos-latest]
     env:
       QT_QPA_PLATFORM: offscreen
-      # 本项目的界面文案、断言消息和测试数据都是中文；运行器默认是 cp1252 区域，
-      # 强制 UTF-8 可以避免 Python 往管道写中文时抛 UnicodeEncodeError。
+      # 界面文案、断言消息和测试数据都是中文；强制 UTF-8 避免在 cp1252 区域报 UnicodeEncodeError。
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
+
+      - name: 安装 Linux 下 Qt 离屏运行所需的系统库
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 fonts-noto-cjk
 
       - uses: actions/setup-python@v5
         with:

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from filemind.ai.providers import ENVIRONMENT_KEY_NAMES, PROVIDER_BY_ID
+from filemind.storage.paths import config_dir
 
 
 class SecretStore(Protocol):
@@ -221,9 +222,8 @@ class SettingsStore:
 
 
 def _default_settings_path() -> Path:
-    """Use the current user's application-data directory, never the repository."""
-    app_data = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
-    return (Path(app_data) if app_data else Path.home() / ".config") / "FileMind" / "settings.json"
+    """Use the current user's configuration directory, never the repository."""
+    return config_dir() / "settings.json"
 
 
 def _default_secret_store() -> SecretStore | None:

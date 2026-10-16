@@ -12,6 +12,8 @@ from threading import RLock
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QImageReader, QPainter
 
+from filemind.storage.paths import data_dir
+
 
 class WorkspaceError(RuntimeError):
     """Safe-to-display local layout or avatar error."""
@@ -31,8 +33,7 @@ class WorkspaceStore:
     """Persist only UI choices and an explicitly selected avatar thumbnail."""
 
     def __init__(self, path: Path | None = None, memory: bool = False) -> None:
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local" / "share"))
-        self.path = path or root / "FileMind" / "workspace.json"
+        self.path = path or data_dir() / "workspace.json"
         self.memory = memory
         self._value = WorkspacePreferences()
         self._lock = RLock()
