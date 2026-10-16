@@ -7,7 +7,7 @@
 | 项目 | 状态 |
 | --- | --- |
 | 分支 | `main`，最新提交 `e182529`，与 `origin/main` 同步 |
-| 持续集成 | 三平台矩阵（Windows / Ubuntu / macOS + Python 3.13），每次推送自动运行 |
+| 持续集成 | 通过：[三平台矩阵运行](https://github.com/asegfbsldiu/FileMind/actions/runs/38850699552)（Windows / Ubuntu / macOS + Python 3.13，各 147 passed / 24 subtests） |
 | 测试 | 141 个测试函数；`pytest` 报 **147 passed / 24 subtests passed**（约 30 秒） |
 | 静态检查 | `compileall`、`pip check`、`pyflakes` 均无告警 |
 | 本地环境 | Python 3.13.15（`D:\python`）+ 项目虚拟环境 `D:\filemind\.venv`；已适配 Windows / macOS / Linux |
@@ -63,6 +63,7 @@
 - 锁屏对话框在缺少 DPAPI 的系统上不再显示"在此 Windows 用户下记住解锁"，改为禁用并说明"当前系统不支持安全记住解锁"，避免给出无法兑现的承诺。
 - LibreOffice 探测补充 macOS 应用包、`/usr/lib/libreoffice` 与 snap 路径。
 - CI 从单一 Windows 作业改为三平台矩阵，Linux 作业按官方依赖安装 Qt 运行库（libegl1、libxkbcommon-x11、xcb 系列、libfontconfig1 等）与 `fonts-noto-cjk`。
+- 三平台验证结果（提交 `6ad6923`）：Windows 147 passed（28.5 秒）、Ubuntu 147 passed（11.9 秒）、macOS 147 passed（16.3 秒）+ 各 24 subtests。用例数完全一致，说明平台分支测试在各系统上都真正执行了；CI 会在成功时把这一行作为 notice 发出，便于在运行页直接核对。
 
 跨平台能力的边界：Windows 仍是主要验证与使用目标；macOS/Linux 上可通过 CI 证明代码路径与界面渲染可用，但没有在真实桌面会话里人工验收过长时间运行、系统托盘、多显示器等场景。“记住解锁 7 天”与系统凭据存储目前只有 Windows 实现。
 
