@@ -16,6 +16,10 @@ jobs:
     timeout-minutes: 20
     env:
       QT_QPA_PLATFORM: offscreen
+      # 本项目的界面文案、断言消息和测试数据都是中文；运行器默认是 cp1252 区域，
+      # 强制 UTF-8 可以避免 Python 往管道写中文时抛 UnicodeEncodeError。
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +53,15 @@ jobs:
           if ($code -ne 0) {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
               '## pytest 失败输出', '', '```text', $output, '```')
+            $lines = Get-Content -Path (Join-Path $env:RUNNER_TEMP 'pytest-output.txt')
+            foreach ($line in ($lines | Where-Object { $_ -match '^(FAILED|ERROR) ' } | Select-Object -First 30)) {
+              Write-Output ("::error title=pytest::{0}" -f ($line -replace '%', '%25'))
+            }
+            foreach ($line in ($lines | Select-Object -Last 30)) {
+              $message = ($line -replace '%', '%25').TrimEnd()
+              if (-not $message) { $message = '-' }
+              Write-Output ("::error title=pytest-tail::{0}" -f $message)
+            }
             Write-Error "pytest 失败，退出码 $code"
           } else {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value 'pytest 全部通过。'
