@@ -2,8 +2,14 @@
 
 import gc
 import os
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# Windows 的 TEMP/TMP 可能是 8.3 短路径（例如 C:\Users\RUNNER~1\...），而应用内部会用
+# Path.resolve() 规范化成长路径，于是同一个目录在断言里出现两种写法。把测试临时目录的
+# 基准统一为规范化路径，断言仍然比较同一个真实目录，强度不变。
+tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool

@@ -593,11 +593,11 @@ class MainWindowIntegrationTests(unittest.TestCase):
         poll.setInterval(10)
         poll.timeout.connect(lambda: event_loop.quit() if window._active_worker is None else None)
         poll.start()
-        timeout.start(5000)
+        timeout.start(30000)
         event_loop.exec()
         poll.stop()
         if window._active_worker is not None:
-            raise TimeoutError("后台扫描任务未在 5 秒内完成")
+            raise TimeoutError("后台扫描任务未在等待时间内完成")
 
     @staticmethod
     def _wait_for_chat_task(window: MainWindow) -> None:

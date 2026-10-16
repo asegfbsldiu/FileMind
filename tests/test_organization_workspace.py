@@ -16,10 +16,12 @@ from tools.review_ui import build_review
 
 
 def wait_for_task(window) -> None:
-    deadline = time.monotonic() + 5
+    # 共享 CI 运行器只有两个虚拟核心，全局 Qt 线程池可能仍在执行锁屏的 PBKDF2 任务，
+    # 因此给后台任务更宽的预算；任务始终不结束仍然会失败。
+    deadline = time.monotonic() + 30
     while window._active_worker is not None and time.monotonic() < deadline:
         QTest.qWait(10)
-    assert window._active_worker is None
+    assert window._active_worker is None, "后台任务未在等待时间内结束"
     QApplication.processEvents()
 
 
@@ -118,7 +120,7 @@ def test_edited_rule_during_ai_request_discards_old_plan(tmp_path: Path) -> None
             "deepseek", "https://api.deepseek.com", "mock-model", 10, "mock-key")), \
             patch("filemind.ui.main_window.OpenAICompatibleClient", DelayedModel):
         page.rule_send_button.click()
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 15
         while not entered.is_set() and time.monotonic() < deadline:
             QTest.qWait(10)
         assert entered.is_set()
