@@ -112,7 +112,7 @@ AI 测试使用 mock，不调用真实密钥或网络。Qt 集成测试使用 `Q
 .\.venv\Scripts\python.exe tools/review_ui.py --page chat --snapshot .artifacts/ui-review/chat.png
 ```
 
-工具中的文件、路径、会话是临时生成的验收数据，不代表真实模型回答。正式使用仍从 `main.py` 启动。[界面改造说明](docs/UI_REDESIGN.md) 与 [工作区改造验收](docs/WORKSPACE_REDESIGN.md) 是 2026-10-15 的历史验收记录，其中的能力边界早于后续转换层扩展，当前状态以本文件与代码为准。本项目还提供 `.agents/skills/filemind-desktop-ui/SKILL.md`，便于后续开发沿用当前 Qt 布局与安全约定。
+工具中的文件、路径、会话是临时生成的验收数据，不代表真实模型回答。正式使用仍从 `main.py` 启动。[界面改造说明](docs/UI_REDESIGN.md) 与 [工作区改造验收](docs/WORKSPACE_REDESIGN.md) 是 2026-10-15 的历史验收记录，其中的能力边界早于后续转换层扩展；当前的工程化收尾、运行与校验方式见 [进度报告](docs/PROGRESS_REPORT.md)，能力边界以本文件与代码为准。本项目还提供 `.agents/skills/filemind-desktop-ui/SKILL.md`，便于后续开发沿用当前 Qt 布局与安全约定。
 
 ## 目录结构
 
