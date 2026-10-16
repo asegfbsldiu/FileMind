@@ -1,0 +1,46 @@
+# FileMind 包元数据与入口点。
+# 运行依赖以 requirements.txt 为唯一来源，避免两处清单漂移。
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "filemind"
+version = "1.0.0"
+description = "Windows 桌面文件整理助手：本地规则或 AI 建议、本地安全校验、确认后执行与撤销。"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "asegfbsldiu" }]
+keywords = ["file-organizer", "pyside6", "desktop-app", "openai-compatible"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: End Users/Desktop",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Desktop Environment :: File Managers",
+]
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0,<10"]
+
+[project.gui-scripts]
+filemind = "filemind.ui.main_window:main"
+
+[project.urls]
+Repository = "https://github.com/asegfbsldiu/FileMind"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["filemind*"]
+
+[tool.setuptools.package-data]
+"filemind.ui" = ["assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows / Python 3.13
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: 依赖一致性检查
+        run: python -m pip check
+
+      - name: 编译检查
+        run: python -m compileall -q main.py filemind tests tools
+
+      - name: 运行测试
+        run: python -m pytest -q
+
+      - name: 校验打包元数据与入口点
+        run: |
+          python -m pip install --no-deps -e .
+          python -c "import importlib.metadata as m; d = m.metadata('filemind'); print(d['Name'], d['Version'], d['Requires-Python'])"

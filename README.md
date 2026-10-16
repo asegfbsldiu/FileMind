@@ -14,17 +14,22 @@ FileMind 是一个 Python + PySide6 Windows 桌面文件整理工具。它可用
 - 扫描、连接测试、AI 请求和文件操作在后台线程中进行。
 - Orbit 是独立通用对话页面，支持本地会话、新建/切换/删除、Markdown 回答、快捷任务、停止与重试；附件需用户明确选择并在发送前确认。
 - 侧栏可通过顶部按钮或 `Ctrl+B` 收起/展开，可拖动分隔线调整至 230–380px，宽度和收起状态会保存在本机。
-- 新增独立格式转换页：单帧图片编码转换、图片转单页 PDF、UTF-8/UTF-16、CSV/JSON 和单文件 ZIP；只显示当前文件和本机 Qt 插件实际支持的目标。
+- 独立格式转换页：图片编码与图片转单页 PDF、文本编码与 HTML/DOCX/XLSX/YAML/XML 转换、CSV/JSON 互转、PDF 文本层与页面图像、音视频重编码、DOCX/XLSX/PPTX 内容提取、EPUB 章节文字和单文件 ZIP；只显示当前文件和本机后端真正支持的目标，缺少后端时不会列出该目标。
 - Orbit 附件第一版支持 PNG/JPEG/GIF/WebP 图片（仅 DeepSeek V4.1 Flash 已核验图像输入）及 UTF-8 文本/代码文件；单个附件上限 4 MB，每次最多 5 个、总量 12 MB。PDF、Office 文档和多模态模型自动探测尚未实现。
 
 ## 安装与启动
 
-使用 Python 3.13；当前界面与本机锁屏在 Windows 下验证。安装 PySide6 Essentials 和 OpenAI SDK：
+需要 Python 3.13；当前界面、本机锁屏和转换后端在 Windows 下验证。运行依赖见 `requirements.txt`：PySide6 Essentials、OpenAI SDK、Pillow、pypdfium2、PyYAML、python-docx、openpyxl、python-pptx、defusedxml、imageio-ffmpeg。
+
+推荐使用项目内的独立虚拟环境，避免污染系统解释器：
 
 ```powershell
-py -3.13 -m pip install -r requirements.txt
-py -3.13 main.py
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
 ```
+
+如果本机没有 `py` 启动器，把 `py -3.13` 换成 Python 3.13 解释器的完整路径。也可以直接安装本仓库：`pip install -e .`（元数据在 `pyproject.toml`，同时提供指向 `filemind.ui.main_window:main` 的 `filemind` 命令）。
 
 ## 本机密码与锁屏
 
@@ -38,17 +43,25 @@ py -3.13 main.py
 
 ## 本地格式转换
 
-在侧栏打开“格式转换”，选择或拖入一个文件，等待识别后选择目标，点击“开始转换并保存…”，指定一个尚不存在的输出文件。源文件保留，已有输出不会覆盖；可以取消尚未发布的任务。编码期间取消会在安全停止点生效，结果发布完成后会如实显示成功。
+在侧栏打开“格式转换”，选择或拖入一个文件，等待识别后选择目标，点击“开始转换并保存…”，指定一个尚不存在的输出文件。源文件保留，已有输出不会覆盖；可以取消尚未发布的任务。编码期间取消会在安全停止点生效，结果发布完成后会如实显示成功。每次只处理一个文件，整个过程不调用 AI、不联网。
 
 | 输入 | 真实实现 | 限制 |
 | --- | --- | --- |
-| PNG/JPEG/WebP/BMP/GIF/TIFF 单帧图片 | PNG/JPEG/WebP/BMP/TIFF 编码器中本机可用的项、单页 PDF | 动图和多页输入拒绝转换；JPEG 有损且透明区域填白；无 OCR |
-| TXT/Markdown/代码/日志/CSV/JSON | UTF-8 或带 BOM 的 UTF-16 文本输出 | 输入仅接受 UTF-8 或带 BOM 的 UTF-16，不猜测其他编码 |
-| CSV | JSON 字符串记录数组 | 表头不能重复或为空，列数必须一致 |
-| JSON | 格式化 JSON、扁平对象数组转 CSV | 嵌套结构拒绝转 CSV，避免静默丢失信息 |
+| PNG/JPEG/WebP/BMP/GIF/TIFF/AVIF/ICO/TGA/PCX/PPM 等单帧图片 | Pillow 实际可写的编码格式（本机为 PNG/JPEG/WebP/BMP/TIFF/GIF/AVIF）、图片 → 单页 PDF | 动图和多页输入拒绝转换；JPEG、AVIF 有损且透明区域填白；不承诺保留 EXIF 与色彩配置；无 OCR |
+| TXT/Markdown/代码/日志/CSV/JSON/HTML/XML/YAML | UTF-8 或带 BOM 的 UTF-16 文本输出 | 输入仅接受 UTF-8 或带 BOM 的 UTF-16，不猜测其他编码 |
+| CSV | JSON 字符串记录数组、XLSX 工作表 | 表头不能重复或为空，列数必须一致；XLSX 单元格按文本写入，不写成公式 |
+| JSON | 格式化 JSON、扁平对象数组转 CSV、JSON ↔ YAML | 嵌套结构拒绝转 CSV，避免静默丢失信息 |
+| HTML | 提取可见文本 | 忽略脚本和样式，不加载外部链接 |
+| DOCX / PPTX | 段落、表格、文本框文字 → TXT 或静态 HTML | 不保留版面、图片和公式；PPTX 不导出备注与动画 |
+| XLSX | 全部工作表值 → JSON 或每表一个 CSV 的 ZIP | 只读缓存值，不计算公式、不连接外部数据；每表限 50000 行 / 200 列 |
+| PDF（未加密，1–100 页） | 文本层 → TXT、逐页渲染 → PNG/JPEG 页面 ZIP | 本地 PDFium；扫描版无文本时明确提示，不含 OCR，不保留交互表单 |
+| MP3/WAV/FLAC/Ogg/AAC/M4A 等音频 | 重新编码为 MP3/WAV/FLAC/Ogg | 依赖 FFmpeg（默认由 `imageio-ffmpeg` 提供，也可用系统安装的版本）；重新编码可能有损，只处理首个音轨 |
+| MP4/MOV/MKV/WebM/AVI/WMV 等视频 | 重新编码为 MP4/WebM/MKV | 同上；不保留字幕与封面，单文件限 64 MB / 5 分钟处理时间 |
+| EPUB | 按阅读顺序提取章节文字 | 不处理 DRM，不读取外链 |
+| DOC/DOCX/XLS/XLSX/PPT/PPTX/ODT/ODS/ODP/RTF | 经本机 LibreOffice 转 PDF 或对应 Office/ODF 格式（实验性） | 需自行安装 LibreOffice，未安装时该组目标不出现在界面；排版、字体和公式结果可能变化 |
 | 任意普通文件 | 单文件 ZIP 打包 | 不递归文件夹、不解压，源文件保持不变 |
 
-单个输入最大 64 MB，文本转换最大 8 MB，图片最大 3200 万像素。转换先写入输出目录中的临时文件，再检查源文件状态并以不覆盖方式发布。Office/WPS、音视频和 PDF 转文档尚未集成；页面检测 `ffmpeg`、`soffice`、`pandoc` 是否存在仅供说明，即使安装也不会宣称已有对应适配器。整个转换流程不调用 AI、不联网。
+单个输入最大 64 MB，文本转换最大 8 MB，图片最大 3200 万像素。转换先写入输出目录中的临时文件，再检查源文件状态并以不覆盖方式发布。可用目标按本机真实安装的后端动态显示：缺少对应库或外部程序时界面不会列出该格式，也不提供占位式的假转换。
 
 ## 树状整理预览
 
@@ -78,41 +91,49 @@ Orbit 首次发送消息前会单独询问授权。发送范围是你输入的�
 ## 测试
 
 ```powershell
-py -3.13 -m pip install -r requirements-dev.txt
-py -3.13 -m pytest -q
-py -3.13 -m compileall -q main.py filemind tests tools
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m compileall -q main.py filemind tests tools
 ```
+
+当前完整套件为 134 passed、24 subtests passed（约 28 秒；最近一次验收环境为 Python 3.13.15 + pytest 9.1.1）。同样这三条命令在 `.github/workflows/ci.yml` 中按 Windows + Python 3.13 自动运行。
 
 AI 测试使用 mock，不调用真实密钥或网络。Qt 集成测试使用 `QT_QPA_PLATFORM=offscreen` 和临时目录。
 
 可以用隔离工具检查界面，不读取 `.env`、环境 API Key、Windows API 凭据或真实历史记录：
 
 ```powershell
-py -3.13 tools/review_ui.py --page setup --width 920 --height 660
-py -3.13 tools/review_ui.py --page preview --width 1024 --height 700
-py -3.13 tools/review_ui.py --page orbit --width 1280 --height 850
-py -3.13 tools/review_ui.py --page conversion --width 1024 --height 700
-py -3.13 tools/review_ui.py --page chat --snapshot .artifacts/ui-review/chat.png
+.\.venv\Scripts\python.exe tools/review_ui.py --page setup --width 920 --height 660
+.\.venv\Scripts\python.exe tools/review_ui.py --page preview --width 1024 --height 700
+.\.venv\Scripts\python.exe tools/review_ui.py --page orbit --width 1280 --height 850
+.\.venv\Scripts\python.exe tools/review_ui.py --page conversion --width 1024 --height 700
+.\.venv\Scripts\python.exe tools/review_ui.py --page chat --snapshot .artifacts/ui-review/chat.png
 ```
 
-工具中的文件、路径、会话是临时生成的验收数据，不代表真实模型回答。正式使用仍从 `main.py` 启动。历史改造记录见 [界面改造说明](docs/UI_REDESIGN.md)，本轮五阶段变更见 [工作区改造验收](docs/WORKSPACE_REDESIGN.md)。本项目还提供 `.agents/skills/filemind-desktop-ui/SKILL.md`，便于后续开发沿用当前 Qt 布局与安全约定。
+工具中的文件、路径、会话是临时生成的验收数据，不代表真实模型回答。正式使用仍从 `main.py` 启动。[界面改造说明](docs/UI_REDESIGN.md) 与 [工作区改造验收](docs/WORKSPACE_REDESIGN.md) 是 2026-10-15 的历史验收记录，其中的能力边界早于后续转换层扩展，当前状态以本文件与代码为准。本项目还提供 `.agents/skills/filemind-desktop-ui/SKILL.md`，便于后续开发沿用当前 Qt 布局与安全约定。
 
 ## 目录结构
 
 ```text
 filemind/
   ai/          服务接口、provider 预设、提示词、结构化校验、OpenAI SDK 适配
-  core/        扫描、分类、整理计划安全校验、执行与撤销
-  conversion/  本地格式识别、转换能力与安全输出
-  storage/     操作历史、普通设置、Windows 凭据存储
+  core/        扫描、分类、组织预设、整理计划安全校验、执行与撤销
+  conversion/  本地格式识别、转换能力与安全输出（图片、文本、PDF、Office、音视频）
+  storage/     操作历史、普通设置、Windows 凭据存储、本机锁屏、工作区偏好
   ui/          PySide6 页面、模型视图、后台任务
-tests/         核心、AI、设置持久化及 UI 集成测试
+tests/         核心、AI、设置持久化、锁屏及 UI 集成测试
+tools/         review_ui.py 隔离界面检查与截图
+docs/          历史界面与工作区改造验收记录
 main.py        应用入口
+pyproject.toml 包元数据、入口点与开发依赖
 ```
 
 ## 已知限制
 
 - 只支持 OpenAI Chat Completions 兼容接口；每个模型与服务商配置仍需使用“测试连接”实测。
-- 第一版只将元数据作为 AI 输入，无法理解文件正文。模型给出的语义分类质量无法由本地保证。
+- 第一版只将元数据作为 AI 输入，无法理解文件正文；转换页已有的文本抽取能力尚未接入 AI 分类。模型给出的语义分类质量无法由本地保证。
+- 预览表是只读的：目前只能整批确认，或修改规则后重新生成，不能逐条编辑或排除；任一目标冲突会阻止整份计划执行。
 - Windows 凭据管理器是推荐密钥存储；明文本地存储只能作为用户明确选择的降级方案。
 - 仅处理所选目录第一层，不递归扫描。撤销基于文件大小和修改时间检查，无法识别同时恢复这两项属性的内容改写。
+- Office 排版转换依赖本机 LibreOffice，音视频转换依赖 FFmpeg，两者都不随项目分发，也未在 CI 中验证。
+- 操作历史写在被整理目录的 `.filemind/history/` 内，目录被移动或改名后历史不会跟随。
