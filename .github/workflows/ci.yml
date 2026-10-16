@@ -77,7 +77,10 @@ jobs:
             }
             Write-Error "pytest 失败，退出码 $code"
           } else {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value 'pytest 全部通过。'
+            $lines = Get-Content -Path (Join-Path $env:RUNNER_TEMP 'pytest-output.txt')
+            $summary = ($lines | Where-Object { $_.Trim() } | Select-Object -Last 1)
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value ("pytest 全部通过：" + $summary)
+            Write-Output ("::notice title=pytest::{0}" -f ($summary -replace '%', '%25'))
           }
           exit $code
 
