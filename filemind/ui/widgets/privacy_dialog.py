@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from filemind.ui.styles.theme import resolve_qss
+
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 
@@ -62,16 +64,20 @@ class OrbitPrivacyDialog(QDialog):
         buttons.addWidget(self.continue_button)
         layout.addLayout(buttons)
 
+    def reapply_theme(self) -> None:
+        """Refresh the disclosure colors when its parent theme changes."""
+        self._apply_style()
+
     def _apply_style(self) -> None:
-        self.setStyleSheet("""
-            QDialog#OrbitPrivacyDialog { background:#FBFAFF; }
-            QLabel#PrivacyEyebrow { color:#765AE0; font-size:9pt; font-weight:650; }
-            QLabel#PrivacyTitle { color:#20183D; font-size:17pt; font-weight:700; }
-            QLabel#PrivacyService { background:#F0EBFF; color:#5B45B1; border-radius:10px; padding:10px 12px; }
-            QLabel#PrivacyDetails { color:#4D4962; }
-            QLabel#PrivacyNote { color:#777199; background:#F5F3FA; border-radius:10px; padding:10px 12px; }
+        self.setStyleSheet(resolve_qss("""
+            QDialog#OrbitPrivacyDialog { background:__purple_soft__; }
+            QLabel#PrivacyEyebrow { color:__purple_text__; font-size:9pt; font-weight:650; }
+            QLabel#PrivacyTitle { color:__text__; font-size:17pt; font-weight:700; }
+            QLabel#PrivacyService { background:__primary_soft__; color:__link__; border-radius:10px; padding:10px 12px; }
+            QLabel#PrivacyDetails { color:__text__; }
+            QLabel#PrivacyNote { color:__muted__; background:__surface__; border-radius:10px; padding:10px 12px; }
             QPushButton { min-height:36px; border-radius:10px; padding:7px 15px; }
-            QPushButton#PrivacyCancel { color:#625C75; background:#FFFFFF; border:1px solid #E5E0F0; }
-            QPushButton#PrivacyContinue { color:white; background:#8163E8; border:1px solid #8163E8; font-weight:650; }
-            QPushButton#PrivacyContinue:hover { background:#7051D8; border-color:#7051D8; }
-        """)
+            QPushButton#PrivacyCancel { color:__text__; background:__card__; border:1px solid __border__; }
+            QPushButton#PrivacyContinue { color:white; background:__primary__; border:1px solid __primary__; font-weight:650; }
+            QPushButton#PrivacyContinue:hover { background:__primary_hover__; border-color:__primary_hover__; }
+        """))

@@ -97,7 +97,26 @@ def test_local_menu_lock_and_avatar_are_real_actions(tmp_path: Path) -> None:
     window.local_auth_requested.connect(requested.append)
     actions = window.account_button.menu().actions()
     assert "头像" in actions[0].text()
-    assert "登出" in actions[2].text()
-    actions[2].trigger()
+    lock_action = next(action for action in actions if "登出" in action.text())
+    lock_action.trigger()
     assert requested == ["unlock"]
     window.close()
+
+
+def test_rule_panel_height_survives_window_restart(tmp_path: Path) -> None:
+    first, _ = build_review(tmp_path, "empty")
+    first.resize(1024, 700)
+    first.show()
+    QTest.qWait(50)
+    first.organize_page.layout_splitter.moveSplitter(210, 1)
+    first._save_workspace_layout()
+    saved_height = first.workspace_store.load().organizer_height
+    assert 140 <= saved_height <= 600
+    assert saved_height == first.organize_page.layout_splitter.sizes()[0]
+    first.close()
+    second, _ = build_review(tmp_path, "empty")
+    second.resize(1024, 700)
+    second.show()
+    QTest.qWait(50)
+    assert abs(second.organize_page.layout_splitter.sizes()[0] - saved_height) <= 2
+    second.close()

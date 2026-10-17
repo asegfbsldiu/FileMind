@@ -72,30 +72,39 @@ def execute_plan(
         entry = _operation_entry(operation)
         record.operations.append(entry)
         history.save(record)
-        skip_reason = _skip_reason(operation)
-        if skip_reason is not None:
-            entry.update(status="skipped", skip_reason=skip_reason)
-            history.save(record)
-            result.skipped += 1
-            result.skip_reasons.append(f"{operation.source.name}：{skip_reason}")
-        else:
-            failure = _execute_one(plan.root, operation, entry, record, history, move_file)
-            if failure:
-                result.failures.append(failure)
-                result.failed += 1
-            else:
-                result.succeeded += 1
+        _apply_operation(plan.root, operation, entry, record, history, move_file, result)
         if on_progress:
             on_progress(index, total)
     return result
 
 
+def _apply_operation(root: Path, operation: PlannedOperation, entry: dict[str, object],
+                     record: OperationRecord, history: OperationHistory,
+                     move_file: MoveFile, result: ExecutionResult) -> None:
+    """Persist an explicit skip or delegate one checked move to the journal."""
+    skip_reason = _skip_reason(operation)
+    if skip_reason is not None:
+        entry.update(status="skipped", skip_reason=skip_reason)
+        history.save(record)
+        result.skipped += 1
+        result.skip_reasons.append(f"{operation.source.name}：{skip_reason}")
+        return
+    failure = _execute_one(root, operation, entry, record, history, move_file)
+    if failure:
+        result.failures.append(failure)
+        result.failed += 1
+    else:
+        result.succeeded += 1
+
+
 def _skip_reason(operation: PlannedOperation) -> str | None:
-    """Return why this row must not run, without touching the filesystem."""
+    """Read current target state without modifying any file."""
     if operation.excluded:
         return "已在预览中排除"
     if operation.warning:
         return operation.warning
+    if operation.review_note:
+        return operation.review_note
     if operation.target.is_symlink():
         return "目标路径是符号链接，不能执行"
     if operation.target.exists():

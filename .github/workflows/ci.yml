@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
   workflow_dispatch:
 
@@ -88,3 +88,5 @@ jobs:
         run: |
           python -m pip install --no-deps -e .
           python -c "import importlib.metadata as m; d = m.metadata('filemind'); print(d['Name'], d['Version'], d['Requires-Python'])"
+          python -m pip wheel . --no-deps --wheel-dir dist
+          python -c "from pathlib import Path; from zipfile import ZipFile; p=next(Path('dist').glob('filemind-*.whl')); z=ZipFile(p); required={'filemind/ui/styles/orbit.qss','filemind/ui/assets/deepseek-logo.png','filemind/ui/widgets/combo_box.py','filemind/models/__init__.py'}; assert required.issubset(z.namelist()), required-set(z.namelist()); assert not any(Path(n).name.startswith('.env') or 'local_api_keys' in n for n in z.namelist()); print('Wheel resources verified')"

@@ -54,6 +54,11 @@ def validate_category(category: str) -> str:
     return validate_file_name(normalized)
 
 
+def name_suffixes(name: str) -> tuple[str, ...]:
+    """Share case-insensitive extension chains across AI and manual renames."""
+    return tuple(suffix.casefold() for suffix in Path(name).suffixes)
+
+
 def validate_file_name(name: str) -> str:
     """Reject names that are unsafe or invalid on common desktop filesystems."""
     if not name or name in {".", ".."} or INVALID_NAME_CHARS.search(name):
@@ -110,13 +115,12 @@ def build_plan(
                 review_note=_review_note(stable_file_id(file_key(selected_root, source)), failed_file_ids),
             )
         entries.append(entry)
-    return assemble_plan(selected_root, entries, failed_file_ids)
+    return assemble_plan(selected_root, entries)
 
 
 def assemble_plan(
     root: Path,
     entries: Sequence[PlanEntry],
-    failed_file_ids: Mapping[str, str] | set[str] | None = None,
 ) -> OperationPlan:
     """Compute targets, resolve collisions inside the plan, and mark risky rows.
 
@@ -135,6 +139,8 @@ def assemble_plan(
             target_directory = target_directory.joinpath(*subdirectory.split("/"))
         _validate_target_directory(selected_root, target_directory)
         requested_name = entry.new_name or source.name
+        if name_suffixes(requested_name) != name_suffixes(source.name):
+            raise ValueError(f"新文件名必须保留原扩展名：{source.suffix or '无扩展名'}")
         new_name = unique_target_name(target_directory,
                                       validate_file_name(requested_name), seen_targets)
         target = target_directory / new_name

@@ -7,16 +7,17 @@ from threading import Event
 from typing import Callable
 
 from PySide6.QtCore import Qt, QThreadPool, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QResizeEvent
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget,
+    QBoxLayout, QFileDialog, QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton,
+    QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from filemind.conversion.models import ConversionInput, ConversionResult
 from filemind.conversion.service import convert_file, inspect_input
 from filemind.ui.styles.icons import svg_icon
 from filemind.ui.widgets.card import Card
+from filemind.ui.widgets.combo_box import StyledComboBox
 from filemind.ui.workers import TaskWorker
 from filemind.ui.widgets.format_cards import FormatCards
 
@@ -57,6 +58,7 @@ class ConversionPage(QWidget):
         self._worker: TaskWorker | None = None
         self.input_info: ConversionInput | None = None
         self.result: ConversionResult | None = None
+        self._selected_path: Path | None = None
         self._build_ui()
         self._update_actions()
 
@@ -65,7 +67,13 @@ class ConversionPage(QWidget):
         """Let the shell wait for safe cancellation before locking or closing."""
         return self._worker is not None
 
+    @property
+    def has_pending_work(self) -> bool:
+        """Include capability discovery when the application closes or locks."""
+        return self.is_busy or self.format_cards.is_discovering
+
     def _build_ui(self) -> None:
+        self.setObjectName("ConversionPage")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea()
@@ -76,19 +84,34 @@ class ConversionPage(QWidget):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
-        steps = QLabel("选择文件    →    识别格式    →    本地转换    →    查看结果")
+        steps = QLabel("01  选择文件     →     02  识别格式     →     03  本地转换     →     04  保存结果")
+        self.steps_label = steps
         steps.setObjectName("ConversionSteps")
         steps.setWordWrap(True)
+        steps.setMinimumHeight(44)
+        steps.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         layout.addWidget(steps)
-        workspace = QHBoxLayout()
+        self.workspace_holder = QWidget()
+        workspace = QBoxLayout(QBoxLayout.Direction.LeftToRight, self.workspace_holder)
+        self.workspace_layout = workspace
+        workspace.setContentsMargins(0, 0, 0, 0)
         workspace.setSpacing(16)
         workspace.addWidget(self._build_drop_zone(), 3)
         workspace.addWidget(self._build_options(), 2)
-        layout.addLayout(workspace, 1)
+        self.workspace_holder.setMinimumHeight(340)
+        layout.addWidget(self.workspace_holder)
         layout.addWidget(self._build_capabilities())
         layout.addStretch(1)
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        narrow = self.width() < 650
+        self.workspace_layout.setDirection(QBoxLayout.Direction.TopToBottom if narrow else QBoxLayout.Direction.LeftToRight)
+        self.workspace_holder.setMinimumHeight(600 if narrow else 340)
+        self.workspace_layout.setStretch(0, 1 if narrow else 3)
+        self.workspace_layout.setStretch(1, 1 if narrow else 2)
 
     def _build_drop_zone(self) -> FileDropZone:
         self.drop_zone = FileDropZone()
@@ -109,7 +132,16 @@ class ConversionPage(QWidget):
         self.file_label.setWordWrap(True)
         self.file_label.setMinimumWidth(0)
         self.file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        column.addWidget(self.file_label)
+        selection = QHBoxLayout()
+        selection.addWidget(self.file_label, 1)
+        self.clear_file_button = QToolButton()
+        self.clear_file_button.setObjectName("ClearFileButton")
+        self.clear_file_button.setText("×")
+        self.clear_file_button.setAccessibleName("清除转换文件选择")
+        self.clear_file_button.setToolTip("移除当前选择，保留本机文件")
+        self.clear_file_button.clicked.connect(self.clear_selection)
+        selection.addWidget(self.clear_file_button)
+        column.addLayout(selection)
         self.choose_button = QPushButton("选择本机文件")
         self.choose_button.setObjectName("PrimaryButton")
         self.choose_button.clicked.connect(self._pick_file)
@@ -122,7 +154,7 @@ class ConversionPage(QWidget):
         card = Card()
         card.setMinimumWidth(240)
         card.layout.addWidget(QLabel("目标格式"))
-        self.target_combo = QComboBox()
+        self.target_combo = StyledComboBox()
         self.target_combo.setMinimumWidth(0)
         self.target_combo.addItem("先选择文件")
         self.target_combo.currentIndexChanged.connect(self._target_changed)
@@ -156,7 +188,13 @@ class ConversionPage(QWidget):
         return card
 
     def _build_capabilities(self) -> QWidget:
-        return FormatCards()
+        self.format_cards = FormatCards()
+        self.format_cards.discovery_finished.connect(self._capabilities_ready)
+        return self.format_cards
+
+    def _capabilities_ready(self) -> None:
+        self._update_actions()
+        self.job_finished.emit()
 
     def _pick_file(self) -> None:
         filename, _filter = QFileDialog.getOpenFileName(self, "选择要转换的本机文件")
@@ -165,10 +203,12 @@ class ConversionPage(QWidget):
 
     def select_file(self, filename: str) -> None:
         """Inspect one user-selected input on a worker without reading other files."""
-        if self.is_busy:
+        if self._worker is not None:
             return
         self.input_info = None
         self.result = None
+        self._selected_path = Path(filename)
+        self._reset_target()
         self.output_label.clear()
         self.file_label.setText(Path(filename).name)
         self.file_label.setToolTip(filename)
@@ -191,7 +231,31 @@ class ConversionPage(QWidget):
         for target in result.targets:
             self.target_combo.addItem(target.title, target.key)
         self.status_label.setText(result.description)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
         self._target_changed()
+
+    def clear_selection(self) -> None:
+        """Forget the idle selection without deleting any source or output file."""
+        if self._worker is not None:
+            return
+        self._selected_path = None
+        self.input_info = None
+        self.result = None
+        self.file_label.setText("拖入一个文件，或点击下方按钮选择")
+        self.file_label.setToolTip("")
+        self.output_label.clear()
+        self.output_label.setToolTip("")
+        self._reset_target()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.status_label.setText("已清除选择，请选择新的本机文件。")
+        self._update_actions()
+
+    def _reset_target(self) -> None:
+        self.target_combo.clear()
+        self.target_combo.addItem("先选择文件")
+        self.target_note.setText("只显示本机已实现、当前文件可用的目标。")
 
     def _target_changed(self, *_args: object) -> None:
         if self.input_info:
@@ -200,7 +264,7 @@ class ConversionPage(QWidget):
         self._update_actions()
 
     def _choose_output(self) -> None:
-        if not self.input_info or self.is_busy:
+        if not self.input_info or self._worker is not None:
             return
         target = next((item for item in self.input_info.targets if item.key == self.target_combo.currentData()), None)
         if target is None:
@@ -216,7 +280,7 @@ class ConversionPage(QWidget):
 
     def start_conversion(self, output: Path) -> None:
         """Convert only after a valid target and explicit save destination exist."""
-        if self.input_info is None or self.is_busy:
+        if self.input_info is None or self._worker is not None:
             return
         item, key = self.input_info, str(self.target_combo.currentData())
         self.result = None
@@ -269,17 +333,23 @@ class ConversionPage(QWidget):
         self.job_finished.emit()
 
     def _update_actions(self) -> None:
-        busy = self.is_busy
+        busy = self._worker is not None
         self.choose_button.setEnabled(not busy)
         self.drop_zone.setEnabled(not busy)
         self.target_combo.setEnabled(not busy and self.input_info is not None)
         valid = self.input_info and any(target.key == self.target_combo.currentData() for target in self.input_info.targets)
         self.convert_button.setEnabled(not busy and bool(valid))
         self.cancel_button.setEnabled(busy)
+        self.cancel_button.setVisible(busy)
+        self.progress.setVisible(busy or self.result is not None)
+        self.clear_file_button.setVisible(self._selected_path is not None)
+        self.clear_file_button.setEnabled(not busy)
+        self.clear_file_button.setToolTip("请先取消并等待任务停止，再清除选择。" if busy else "移除当前选择，保留本机文件")
         self.open_result_button.setEnabled(not busy and self.result is not None)
 
     def cancel(self) -> None:
         """Request cooperative cancellation before the output publication boundary."""
+        self.format_cards.cancel_discovery()
         if self._worker:
             self._worker.cancel()
             self.status_label.setText("已请求取消，正在等待安全停止点…")

@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import logging
 from threading import Event
+from typing import Iterator
 from urllib.parse import urlsplit
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, BadRequestError
 from openai import NotFoundError, OpenAI, RateLimitError
 
-from filemind.ai.prompts import SYSTEM_PROMPT, build_organize_prompt
-from filemind.ai.response import parse_file_suggestions
-from filemind.ai.schemas import AIBatchFailure, AIFileMetadata, AIOrganizationResult
+from filemind.ai.prompts import SYSTEM_PROMPT, build_organize_prompt, build_organize_content
+from filemind.ai.response import parse_partial_file_suggestions
+from filemind.ai.schemas import AIBatchFailure, AIFileMetadata, AIOrganizationResult, file_metadata
 from filemind.ai.base import ProgressCallback
+from filemind.ai.providers import is_local_connection
 from filemind.models import FileInfo, FileSuggestion
 from filemind.storage.settings import AISettings
 
@@ -33,7 +35,7 @@ class OpenAICompatibleClient:
     def __init__(self, settings: AISettings) -> None:
         validate_connection_settings(settings)
         self.settings = settings
-        self.client = OpenAI(api_key=settings.api_key, base_url=settings.base_url,
+        self.client = OpenAI(api_key=settings.api_key or "ollama", base_url=settings.base_url,
                              timeout=settings.timeout_seconds, max_retries=0)
 
     def test_connection(self) -> str:
@@ -57,10 +59,16 @@ class OpenAICompatibleClient:
     ) -> str:
         """Send one independent chat request and discard results after cancellation."""
         request_messages = [{"role": "system", "content": system_prompt}, *messages]
+        return self.complete(request_messages, cancel_event)
+
+    def complete(self, messages: list[dict[str, object]], cancel_event: Event | None = None) -> str:
+        """Send an adapter request while preserving the existing chat API."""
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("生成已停止")
         try:
             response = self.client.chat.completions.create(
                 model=self.settings.model,
-                messages=request_messages,
+                messages=messages,
             )
         except Exception as error:
             _log_provider_failure(self.settings, error)
@@ -71,6 +79,31 @@ class OpenAICompatibleClient:
         if not content.strip():
             raise AIServiceError("服务返回了空回答，请重试。")
         return content
+
+    def stream(self, messages: list[dict[str, object]],
+               cancel_event: Event | None = None) -> Iterator[str]:
+        """Yield only answer text and close the SDK stream on cancellation."""
+        response_stream = None
+        try:
+            if cancel_event and cancel_event.is_set():
+                raise InterruptedError("生成已停止")
+            response_stream = self.client.chat.completions.create(
+                model=self.settings.model, messages=messages, stream=True)
+            for chunk in response_stream:
+                if cancel_event and cancel_event.is_set():
+                    raise InterruptedError("生成已停止")
+                choices = getattr(chunk, "choices", ()) or ()
+                text = getattr(choices[0].delta, "content", None) if choices else None
+                if text:
+                    yield text
+        except InterruptedError:
+            raise
+        except Exception as error:
+            _log_provider_failure(self.settings, error)
+            raise _friendly_error(error) from None
+        finally:
+            if response_stream is not None:
+                response_stream.close()
 
     def organize_files(
         self,
@@ -98,13 +131,16 @@ class OpenAICompatibleClient:
                     model=self.settings.model,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": build_organize_prompt(batch, user_rule, rename_enabled)},
+                        {"role": "user", "content": build_organize_content(batch, user_rule, rename_enabled)},
                     ],
                 )
                 if cancel_event and cancel_event.is_set():
                     raise InterruptedError("AI 整理已取消")
                 response_text = response.choices[0].message.content or ""
-                suggestions.update(parse_file_suggestions(response_text, batch_map, rename_enabled))
+                parsed, item_failures = parse_partial_file_suggestions(response_text, batch_map, rename_enabled)
+                suggestions.update(parsed)
+                failures.extend(AIBatchFailure((identifier,), message)
+                                for identifier, message in item_failures.items())
             except InterruptedError:
                 raise
             except Exception as error:
@@ -122,7 +158,9 @@ class OpenAICompatibleClient:
 
 def validate_connection_settings(settings: AISettings) -> None:
     """Reject malformed or unsafe connection settings before SDK construction."""
-    if not settings.api_key.strip():
+    if settings.provider_id == "ollama" and not is_local_connection(settings.provider_id, settings.base_url):
+        raise ValueError("本地 Ollama 仅允许本机回环地址；远程服务请使用自定义兼容接口。")
+    if not settings.api_key.strip() and not is_local_connection(settings.provider_id, settings.base_url):
         raise ValueError("请先填写 API Key。")
     parsed = urlsplit(settings.base_url.strip())
     if parsed.scheme not in {"https", "http"} or not parsed.hostname:
@@ -143,9 +181,11 @@ def _make_batches(
     batches: list[list[AIFileMetadata]] = []
     current: list[AIFileMetadata] = []
     for item in files:
+        if len(build_organize_prompt([item], user_rule, rename_enabled)) > MAX_BATCH_CHARS or len(item.image_data_url) > 512 * 1024 + 64:
+            raise ValueError("单个文件的请求数据超出上限，请缩短规则或减少内容。")
         candidate = current + [item]
         encoded = build_organize_prompt(candidate, user_rule, rename_enabled)
-        if len(candidate) > MAX_BATCH_FILES or len(encoded) > MAX_BATCH_CHARS:
+        if len(candidate) > MAX_BATCH_FILES or len(encoded) > MAX_BATCH_CHARS or sum(bool(value.image_data_url) for value in candidate) > 4:
             if not current:
                 raise ValueError(f"文件名过长，无法安全发送给模型：{item.file_name[:80]}")
             batches.append(current)

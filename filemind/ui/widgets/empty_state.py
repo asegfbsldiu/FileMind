@@ -21,7 +21,7 @@ class EmptyState(QWidget):
         self.icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon.setPixmap(svg_icon("spark", "#A5B4FC", 36).pixmap(36, 36))
         self.title = QLabel(title)
-        self.title.setStyleSheet("font-size:12pt;font-weight:600;color:#334155;")
+        self.title.setStyleSheet("font-size:12pt;font-weight:600;")
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.message = QLabel(message)
         self.message.setObjectName("Muted")

@@ -11,7 +11,8 @@ from filemind.conversion.models import ConversionTarget
 RASTER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff",
                    ".avif", ".ico", ".tga", ".pcx", ".ppm", ".pgm", ".pbm"}
 FORMATS = {"png": ("PNG", ".png"), "jpeg": ("JPEG", ".jpg"), "webp": ("WEBP", ".webp"),
-           "bmp": ("BMP", ".bmp"), "tiff": ("TIFF", ".tiff"), "gif": ("GIF", ".gif"), "avif": ("AVIF", ".avif")}
+           "bmp": ("BMP", ".bmp"), "tiff": ("TIFF", ".tiff"), "gif": ("GIF", ".gif"), "avif": ("AVIF", ".avif"),
+           "ico": ("ICO", ".ico"), "tga": ("TGA", ".tga"), "pcx": ("PCX", ".pcx"), "ppm": ("PPM", ".ppm")}
 
 
 def image_targets() -> tuple[ConversionTarget, ...]:
@@ -46,7 +47,13 @@ def convert_image(source: Path, key: str, staging: Path) -> None:
         _validate_image(original)
         image = ImageOps.exif_transpose(original)
         try:
-            if key in {"jpeg", "pdf"}:
+            if key == "ico":
+                image.thumbnail((256, 256))
+                padded = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+                padded.paste(image, ((256 - image.width) // 2, (256 - image.height) // 2))
+                image.close()
+                image = padded
+            if key in {"jpeg", "pdf", "pcx", "ppm"}:
                 flattened = Image.new("RGB", image.size, "white")
                 if "A" in image.getbands() or "transparency" in image.info:
                     rgba = image.convert("RGBA")

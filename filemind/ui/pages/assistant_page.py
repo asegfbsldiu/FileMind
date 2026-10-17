@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, Qt, QTimer, Signal
-from PySide6.QtGui import QPainter, QPixmap, QResizeEvent
-from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QIcon, QResizeEvent
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QStackedWidget,
+    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -14,6 +13,7 @@ from filemind.ai.chat_prompts import SUGGESTED_PROMPTS
 from filemind.chat_models import ChatConversation, ChatMessage
 from filemind.ui.widgets.chat_input import ChatInput
 from filemind.ui.widgets.chat_message import ChatMessageBubble
+from filemind.ui.widgets.orbit_avatar import OrbitAvatar
 from filemind.ui.widgets.suggestion_card import SuggestionCard
 
 
@@ -33,12 +33,23 @@ class AssistantPage(QWidget):
     stop_requested = Signal()
     configure_requested = Signal()
     shortcut_selected = Signal(str, str)
+    motion_preference_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("OrbitRoot")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._conversation_id: str | None = None
+        self._model_ready = False
+        self._user_avatar = QIcon()
+        self._user_name = "你"
+        self._reduced_motion = False
+        self._request_busy = False
+        self._busy_conversation_id: str | None = None
+        self._motion_checkboxes: list[QCheckBox] = []
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.timeout.connect(self._scroll_to_bottom_now)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -51,17 +62,36 @@ class AssistantPage(QWidget):
         self.stack.addWidget(self.home_page)
         self.stack.addWidget(self.chat_page)
         layout.addWidget(self.stack, 1)
-        self._apply_style()
 
     def _build_home_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 8, 0, 6)
         layout.addStretch(1)
-        orb = QLabel()
-        orb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        orb.setPixmap(_orbit_pixmap())
-        layout.addWidget(orb)
+        self._build_welcome(layout)
+        layout.addSpacing(16)
+        self.home_composer = ChatInput()
+        self._connect_composer(self.home_composer)
+        layout.addWidget(self.home_composer)
+        self._build_shortcuts(layout)
+        layout.addStretch(1)
+        footnote = QLabel("Orbit 不会读取本地文件。发送消息前会提示你哪些内容将发送给所选模型服务。")
+        footnote.setObjectName("OrbitFootnote")
+        footnote.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        footnote.setWordWrap(True)
+        layout.addWidget(footnote)
+        layout.addWidget(self._motion_control(), 0, Qt.AlignmentFlag.AlignRight)
+        scroll = QScrollArea()
+        scroll.setObjectName("OrbitHomeScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(page)
+        return scroll
+
+    def _build_welcome(self, layout: QVBoxLayout) -> None:
+        self.hero_avatar = OrbitAvatar(140, animate_idle=True)
+        layout.addWidget(self.hero_avatar, 0, Qt.AlignmentFlag.AlignHCenter)
         title = QLabel("Orbit AI 助手")
         title.setObjectName("OrbitHeroTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -76,10 +106,8 @@ class AssistantPage(QWidget):
         self.setup_notice.setWordWrap(True)
         self.setup_notice.setVisible(False)
         layout.addWidget(self.setup_notice)
-        layout.addSpacing(16)
-        self.home_composer = ChatInput()
-        self._connect_composer(self.home_composer)
-        layout.addWidget(self.home_composer)
+
+    def _build_shortcuts(self, layout: QVBoxLayout) -> None:
         shortcuts = QGridLayout()
         self.shortcuts_grid = shortcuts
         self._shortcut_columns = 4
@@ -92,19 +120,27 @@ class AssistantPage(QWidget):
             shortcuts.addWidget(card, 0, index)
         layout.addSpacing(8)
         layout.addLayout(shortcuts)
-        layout.addStretch(1)
-        footnote = QLabel("Orbit 不会读取本地文件。发送消息前会提示你哪些内容将发送给所选模型服务。")
-        footnote.setObjectName("OrbitFootnote")
-        footnote.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        footnote.setWordWrap(True)
-        layout.addWidget(footnote)
-        scroll = QScrollArea()
-        scroll.setObjectName("OrbitHomeScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(page)
-        return scroll
+
+    def _motion_control(self) -> QCheckBox:
+        control = QCheckBox("减少动态效果")
+        control.setToolTip("保留状态表情，关闭浮动、眨眼和轨道动画。")
+        control.toggled.connect(self._motion_toggled)
+        self._motion_checkboxes.append(control)
+        return control
+
+    def _motion_toggled(self, reduced: bool) -> None:
+        self.set_reduced_motion(reduced)
+        self.motion_preference_changed.emit(reduced)
+
+    def set_reduced_motion(self, reduced: bool) -> None:
+        """Apply a shared motion preference to current and future assistant avatars."""
+        self._reduced_motion = reduced
+        for control in self._motion_checkboxes:
+            previous = control.blockSignals(True)
+            control.setChecked(reduced)
+            control.blockSignals(previous)
+        for avatar in self.findChildren(OrbitAvatar):
+            avatar.set_motion_enabled(not reduced)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -125,7 +161,10 @@ class AssistantPage(QWidget):
         layout.setSpacing(12)
         self.chat_title = QLabel("新对话")
         self.chat_title.setObjectName("OrbitChatTitle")
-        layout.addWidget(self.chat_title)
+        header = QHBoxLayout()
+        header.addWidget(self.chat_title, 1)
+        header.addWidget(self._motion_control())
+        layout.addLayout(header)
         self.message_scroll = QScrollArea()
         self.message_scroll.setObjectName("OrbitMessageScroll")
         self.message_scroll.setWidgetResizable(True)
@@ -138,10 +177,18 @@ class AssistantPage(QWidget):
         self.messages_layout.setSpacing(6)
         self.messages_layout.addStretch(1)
         self.message_scroll.setWidget(self.messages_container)
-        self.message_scroll.setStyleSheet("QScrollArea, QWidget#OrbitMessagesContainer {background:transparent;}")
-        self.message_scroll.viewport().setStyleSheet("background:transparent;")
         layout.addWidget(self.message_scroll, 1)
+        layout.addLayout(self._build_status_row())
+        self.chat_composer = ChatInput()
+        self._connect_composer(self.chat_composer)
+        layout.addWidget(self.chat_composer)
+        return page
+
+    def _build_status_row(self) -> QHBoxLayout:
         status_row = QHBoxLayout()
+        self.activity_avatar = OrbitAvatar(36)
+        self.activity_avatar.setVisible(False)
+        status_row.addWidget(self.activity_avatar)
         self.status_label = QLabel()
         self.status_label.setObjectName("OrbitStatus")
         self.status_label.setWordWrap(True)
@@ -156,11 +203,7 @@ class AssistantPage(QWidget):
         self.configure_error_button.setVisible(False)
         self.configure_error_button.clicked.connect(self.configure_requested.emit)
         status_row.addWidget(self.configure_error_button)
-        layout.addLayout(status_row)
-        self.chat_composer = ChatInput()
-        self._connect_composer(self.chat_composer)
-        layout.addWidget(self.chat_composer)
-        return page
+        return status_row
 
     def _connect_composer(self, composer: ChatInput) -> None:
         composer.send_requested.connect(self.message_submitted.emit)
@@ -174,6 +217,7 @@ class AssistantPage(QWidget):
     def set_model(self, provider_id: str | None, provider_name: str | None, model_name: str | None,
                   has_api_key: bool = False) -> None:
         """Update both composers with the one actual active model profile."""
+        self._model_ready = has_api_key
         self.home_composer.set_model(provider_id, provider_name, model_name, has_api_key)
         self.chat_composer.set_model(provider_id, provider_name, model_name, has_api_key)
         self.setup_notice.setVisible(not has_api_key)
@@ -187,12 +231,14 @@ class AssistantPage(QWidget):
         self.clear_error()
         if conversation is None or not conversation.messages:
             self.stack.setCurrentWidget(self.home_page)
+            self._sync_request_feedback()
             return
         self.chat_title.setText(conversation.title)
         self._clear_messages()
         for message in conversation.messages:
             self._append_bubble(message)
         self.stack.setCurrentWidget(self.chat_page)
+        self._sync_request_feedback()
         self._scroll_to_bottom()
 
     def accept_submission(self) -> None:
@@ -211,25 +257,45 @@ class AssistantPage(QWidget):
         """Reflect only the request belonging to the currently displayed chat."""
         for composer in (self.home_composer, self.chat_composer):
             composer.set_busy(busy)
-        if busy and conversation_id == self._conversation_id:
+        self._request_busy = busy
+        self._busy_conversation_id = conversation_id if busy else None
+        self._sync_request_feedback()
+
+    def _sync_request_feedback(self) -> None:
+        active = self._request_busy and self._busy_conversation_id == self._conversation_id
+        self.activity_avatar.set_state("thinking" if active else "ready")
+        self.activity_avatar.setVisible(active)
+        if active:
             self.status_label.setText("Orbit 正在思考…")
             self.retry_button.setVisible(False)
             self.configure_error_button.setVisible(False)
-        elif busy:
+        elif self._request_busy:
             self.status_label.setText("另一段对话仍在生成；完成后可以继续提问。")
             self.retry_button.setVisible(False)
-        elif not busy:
+        else:
             self.status_label.clear()
             self.retry_button.setVisible(False)
             self.configure_error_button.setVisible(False)
 
+    def show_reply(self, conversation_id: str) -> None:
+        """Celebrate only the newly received answer in the currently visible chat."""
+        if conversation_id != self._conversation_id or not self.isVisible() or self.window().isMinimized():
+            return
+        item = self.messages_layout.itemAt(self.messages_layout.count() - 2)
+        bubble = item.widget() if item is not None else None
+        if isinstance(bubble, ChatMessageBubble) and not bubble.is_user:
+            bubble.play_reply()
+
     def show_error(self, message: str, conversation_id: str) -> None:
         """Show a safe retry state only if this request's conversation is open."""
         self.set_busy(False)
-        if conversation_id == self._conversation_id:
+        if (conversation_id or None) == self._conversation_id:
             self.status_label.setText(message)
             self.retry_button.setVisible(True)
             self.configure_error_button.setVisible(True)
+            if self.stack.currentWidget() is self.home_page:
+                self.setup_notice.setText(message)
+                self.setup_notice.show()
 
     def show_stopped(self, conversation_id: str) -> None:
         """Confirm cancellation without appending a stale model response."""
@@ -241,6 +307,8 @@ class AssistantPage(QWidget):
     def clear_error(self) -> None:
         self.status_label.clear()
         self.retry_button.setVisible(False)
+        self.setup_notice.setVisible(not self._model_ready)
+        self.setup_notice.setText("默认使用设置页中的模型。尚未配置 API Key；附件只会在你选择并确认发送后读取。")
 
     def current_conversation_id(self) -> str | None:
         """Return the ID currently rendered in the message view."""
@@ -251,6 +319,7 @@ class AssistantPage(QWidget):
             item = self.messages_layout.takeAt(0)
             widget = item.widget()
             if widget:
+                widget.hide()
                 widget.deleteLater()
         self.messages_layout.addStretch(1)
 
@@ -258,94 +327,27 @@ class AssistantPage(QWidget):
         stretch = self.messages_layout.takeAt(self.messages_layout.count() - 1)
         if stretch.widget():
             stretch.widget().deleteLater()
-        self.messages_layout.addWidget(ChatMessageBubble(message))
+        bubble = ChatMessageBubble(message, user_avatar=self._user_avatar, user_name=self._user_name)
+        if isinstance(bubble.avatar, OrbitAvatar):
+            bubble.avatar.set_motion_enabled(not self._reduced_motion)
+        self.messages_layout.addWidget(bubble)
         self.messages_layout.addStretch(1)
 
+    def set_user_avatar(self, icon: QIcon) -> None:
+        """Reuse the local account avatar for current and future user messages."""
+        self._user_avatar = icon
+        for bubble in self.messages_container.findChildren(ChatMessageBubble):
+            bubble.set_user_avatar(icon)
+
+    def set_user_name(self, user_name: str) -> None:
+        """Update current and future user captions without rewriting chat history."""
+        self._user_name = user_name
+        for bubble in self.messages_container.findChildren(ChatMessageBubble):
+            bubble.set_user_name(user_name)
+
     def _scroll_to_bottom(self) -> None:
-        QTimer.singleShot(0, lambda: self.message_scroll.verticalScrollBar().setValue(
-            self.message_scroll.verticalScrollBar().maximum()
-        ))
+        self._scroll_timer.start(0)
 
-    def _apply_style(self) -> None:
-        self.setStyleSheet("""
-            QWidget#OrbitRoot { background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #F0ECFF,stop:0.55 #FAF9FF,stop:1 #F4F7FF); }
-            QScrollArea#OrbitHomeScroll, QScrollArea#OrbitHomeScroll > QWidget > QWidget { background:transparent; border:0; }
-            QWidget#OrbitMessagesContainer { background:transparent; }
-            QScrollArea#OrbitMessageScroll { background:transparent; border:0; }
-            QLabel#OrbitHeroTitle { color:#17233A; font-size:26pt; font-weight:700; }
-            QLabel#OrbitHeroSubtitle { color:#66758D; font-size:14pt; padding-bottom:5px; }
-            QLabel#OrbitFootnote, QLabel#OrbitStatus { color:#68778E; }
-            QLabel#OrbitSetupNotice { color:#425C8B; background:#EDF3FF; border:1px solid #D8E5FF;
-                border-radius:10px; padding:8px 12px; }
-            QLabel#OrbitChatTitle { color:#17233A; font-size:15pt; font-weight:650; padding:8px 4px; }
-            QFrame#OrbitComposerCard { background:#FFFFFF; border:1px solid #E1E7F0;
-                border-radius:18px; }
-            QPlainTextEdit#OrbitEditor { border:0; background:transparent; padding:7px 6px;
-                font-size:11pt; color:#17233A; }
-            QComboBox#OrbitModelSelector { min-height:40px; max-height:40px; border:0;
-                background:transparent; padding:0; outline:0; }
-            QComboBox#OrbitModelSelector::drop-down { width:27px; border:0; }
-            QComboBox#OrbitModelSelector::down-arrow { image:none; }
-            QComboBox#OrbitModelSelector QAbstractItemView { background:#FFFFFF;
-                border:1px solid #E7E1FB; border-radius:10px; padding:5px;
-                selection-background-color:#F0EBFF; selection-color:#4D3C8D; }
-            QPushButton#OrbitSendButton { background:#7C5CE7; color:white; border:0; border-radius:16px;
-                padding:9px 18px; font-weight:600; }
-            QPushButton#OrbitSendButton:hover { background:#6745D4; }
-            QPushButton#OrbitSendButton:disabled { background:#E6E1F4; color:#9A8FBA; }
-            QPushButton#OrbitStopButton, QPushButton#OrbitRetryButton { background:#EEF3FF;
-                color:#355EB4; border:1px solid #D8E4FA; border-radius:10px; padding:8px 14px; }
-            QPushButton#OrbitLinkButton { color:#355EB4; border:0; background:transparent; }
-            QFrame#OrbitAssistantBubble { background:#FFFFFF; border:1px solid #E3E8F0; border-radius:16px; }
-            QFrame#OrbitUserBubble { background:#E5EEFF; border:1px solid #D2E0FA; border-radius:16px; }
-            QLabel#OrbitMessageCaption { color:#506B9E; font-weight:600; }
-            QLabel#OrbitMessageAttachments { color:#3E61A1; background:#D7E5FF;
-                border-radius:8px; padding:5px 8px; }
-            QTextBrowser#OrbitMessageContent { border:0; background:transparent; color:#202B3E;
-                padding:0; selection-background-color:#C8D9FC; }
-            QPushButton#OrbitSuggestionCard { text-align:left; background:#FFFFFF;
-                border:1px solid #E2E8F2; border-radius:15px; min-height:112px; }
-            QPushButton#OrbitSuggestionCard:hover { background:#FAFBFF; border-color:#ADC2EF; }
-            QPushButton#OrbitSuggestionCard:pressed { background:#EDF3FF; }
-            QLabel#OrbitSuggestionIcon { color:#416FE8; background:#EEF3FF; border-radius:11px;
-                padding:0; }
-            QLabel#OrbitSuggestionTitle { color:#202C42; font-size:11pt; font-weight:650; }
-            QLabel#OrbitSuggestionDescription { color:#6D7B91; font-size:9pt; }
-            QLabel#OrbitAttachmentSummary { color:#52637B; background:#F6F8FC;
-                border:1px solid #E3E8F0; border-radius:9px; padding:6px 10px; }
-            QPushButton#OrbitAttachmentClear { color:#64748B; background:transparent;
-                border:0; padding:5px 8px; }
-            QPushButton#OrbitAttachButton { color:#405779; background:#F6F8FC;
-                border:1px solid #E0E7F1; border-radius:11px; padding:8px 12px; }
-            QPushButton#OrbitAttachButton:hover { background:#EDF3FF; border-color:#C9D8F3; }
-            QScrollArea#OrbitMessageScroll { background:transparent; border:0; }
-            QLabel#OrbitAttachmentSummary { color:#53647E; background:#F5F7FC;
-                border:1px solid #E3E8F2; border-radius:9px; padding:6px 10px; }
-            QPushButton#OrbitAttachmentClear { color:#697892; background:transparent;
-                border:0; padding:5px 8px; }
-            QPushButton#OrbitAttachButton { color:#465B7B; background:#F5F7FC;
-                border:1px solid #E3E8F2; border-radius:11px; padding:8px 12px; }
-            QPushButton#OrbitAttachButton:hover { background:#EEF3FF; border-color:#CBD9F4; }
-        """)
-
-
-def _orbit_pixmap() -> QPixmap:
-    """Draw a self-contained lavender orbit emblem without network assets."""
-    svg = b'''<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140" viewBox="0 0 140 140">
-      <defs><radialGradient id="orb" cx="35%" cy="25%" r="75%">
-        <stop offset="0" stop-color="#F8E9FF"/><stop offset=".42" stop-color="#C58CFF"/>
-        <stop offset=".78" stop-color="#895CEB"/><stop offset="1" stop-color="#5C8CF5"/></radialGradient>
-        <filter id="glow"><feGaussianBlur stdDeviation="7" result="blur"/>
-          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
-      <circle cx="70" cy="70" r="48" fill="#C5A7FF" opacity=".18" filter="url(#glow)"/>
-      <ellipse cx="70" cy="70" rx="62" ry="24" transform="rotate(-18 70 70)" fill="none" stroke="#FFFFFF" stroke-width="2.5" opacity=".92"/>
-      <circle cx="70" cy="70" r="37" fill="url(#orb)" stroke="#FFFFFF" stroke-opacity=".8" stroke-width="2"/>
-      <path d="M51 81c4-17 13-25 29-29M54 92c14 6 32 2 43-10" fill="none" stroke="#F8F3FF" stroke-width="3" stroke-linecap="round" opacity=".82"/>
-      <circle cx="45" cy="77" r="3" fill="#FFF"/><circle cx="105" cy="51" r="3" fill="#FFF"/>
-    </svg>'''
-    pixmap = QPixmap(140, 140)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    QSvgRenderer(QByteArray(svg)).render(painter)
-    painter.end()
-    return pixmap
+    def _scroll_to_bottom_now(self) -> None:
+        scrollbar = self.message_scroll.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())

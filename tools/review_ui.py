@@ -1,4 +1,4 @@
-"""Launch/capture FileMind with temporary data and no credential-store access."""
+"""Launch FileMind normally, or opt into isolated UI captures and fixture data."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 
 from filemind.chat_models import ChatConversation, ChatMessage
+from filemind.ai.model_config import ModelConfig
 from filemind.core.planner import build_plan
 from filemind.core.scanner import scan_files
 from filemind.models import ClassificationResult
@@ -29,10 +30,19 @@ from filemind.ui.styles.theme import apply_theme
 class ReviewSettings(SettingsStore):
     """Allow isolated edits without ever reading real env or OS credentials."""
 
-    def load(self, provider_id: str | None = None) -> AISettings:
-        return super().load(provider_id)
+    credential_storage_label = "当前隔离验收会话（关闭后清除）"
+
+    def _with_resolved_key(self, config: ModelConfig) -> ModelConfig:
+        """Resolve fixture credentials without inspecting process environment keys."""
+        from dataclasses import replace
+        profile = self.load(config.provider)
+        endpoint = config.base_url.strip() or profile.base_url
+        key = profile.api_key if endpoint.rstrip("/") == profile.base_url.rstrip("/") else ""
+        return replace(config, base_url=endpoint, api_key=key)
 
     def _load_secret(self, settings: AISettings) -> tuple[str, str]:
+        if settings.local:
+            return "", "本机模型无需密钥"
         if settings.store_key_locally:
             value = self._read_local_secret(settings.provider_id)
         else:
@@ -82,30 +92,34 @@ def build_review(root: Path, page: str) -> tuple[QWidget, MainWindow | None]:
         plan = sample_plan(root)
         window.organize_page.set_plan(plan)
         return PlanPreviewDialog(plan, window.organize_page.table_model, window), window
-    if page == "organize":
+    if page in {"organize", "content"}:
         plan = sample_plan(root)
         window.organize_page.set_directory(str(plan.root))
-        window.organize_page.set_plan(plan)
+        if page == "organize":
+            window.organize_page.set_plan(plan)
+        else:
+            window.organize_page.set_files(scan_files(plan.root))
+            window.organize_page.preset_combo.setCurrentIndex(window.organize_page.preset_combo.findData("content"))
     if page in {"orbit", "chat"}:
         window._show_page("assistant")
         if page == "chat":
             messages = (ChatMessage("user", "帮我规划数据结构学习。"), ChatMessage("assistant",
                 "## 学习计划\n\n从线性表、树和图开始。\n\n" + "- 理解概念后用 Python 实现，再分析复杂度。\n" * 25))
             window.assistant_page.set_conversation(ChatConversation(title="学习计划 · 测试数据", messages=messages))
-    if page in {"settings", "conversion"}:
+    if page in {"settings", "conversion", "appsettings"}:
         window._show_page(page)
     return window, window
 
 
-def main() -> int:
-    """Use --snapshot for deterministic screenshots, or inspect interactively."""
+def main(arguments: list[str] | None = None) -> int:
+    """Use normal application persistence unless isolation is explicitly selected."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--page", choices=["setup", "unlock", "reset", "change", "preview", "organize", "orbit", "chat", "settings", "conversion"], default="setup")
+    parser.add_argument("--page", choices=["setup", "unlock", "reset", "change", "preview", "organize", "content", "orbit", "chat", "settings", "appsettings", "conversion"], default="setup")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=850)
     parser.add_argument("--snapshot", type=Path)
     parser.add_argument("--isolated", action="store_true", help="仅使用临时验收数据，不加载真实配置")
-    args = parser.parse_args()
+    args = parser.parse_args(arguments)
     if not args.isolated and not args.snapshot:
         from filemind.ui.startup import run_application
         return run_application()
@@ -123,6 +137,11 @@ def main() -> int:
                 if not widget.grab().save(str(args.snapshot)):
                     raise OSError("无法保存 UI 截图")
                 widget.close()
+                finish_capture()
+            def finish_capture() -> None:
+                if window is not None and window.conversion_page.has_pending_work:
+                    QTimer.singleShot(50, finish_capture)
+                    return
                 application.quit()
             QTimer.singleShot(500, capture)
         result = application.exec()

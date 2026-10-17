@@ -13,6 +13,9 @@ def inspect_extra(source: Path) -> tuple[str, str, tuple[ConversionTarget, ...]]
     from filemind.conversion.media import DEMUXERS, inspect_media
     from filemind.conversion.office import office_targets
     suffix = source.suffix.lower()
+    if suffix in {".ttf", ".otf", ".woff", ".woff2"}:
+        from filemind.conversion.fonts import inspect_font
+        return inspect_font(source)
     if suffix == ".pdf":
         from filemind.conversion.pdf import inspect_pdf
         return inspect_pdf(source)
@@ -34,7 +37,10 @@ def inspect_extra(source: Path) -> tuple[str, str, tuple[ConversionTarget, ...]]
 
 def write_extra(source: Path, key: str, staging: Path, progress: Progress, cancel: Event) -> None:
     """Delegate only registered operations; adapters cannot publish files."""
-    if key.startswith("pdf_"):
+    if key.startswith("font_"):
+        from filemind.conversion.fonts import convert_font
+        convert_font(source, key, staging, progress, cancel)
+    elif key.startswith("pdf_"):
         from filemind.conversion.pdf import convert_pdf
         convert_pdf(source, key, staging, progress, cancel)
     elif key.startswith(("office_", "sheet_")):

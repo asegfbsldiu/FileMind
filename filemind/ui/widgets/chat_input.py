@@ -6,11 +6,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import (QColor, QEnterEvent, QFocusEvent, QPaintEvent, QPainter,
-                           QPainterPath, QPen, QTextCursor)
+                           QInputMethodEvent, QKeyEvent, QPainterPath, QPen, QTextCursor)
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
                                QFileDialog, QSizePolicy, QVBoxLayout, QWidget)
 
 from filemind.ui.widgets.card import Card
+from filemind.ui.widgets.combo_box import StyledComboBox
 from filemind.ui.styles.icons import provider_icon
 from filemind.ui.styles.theme import COLORS
 
@@ -20,15 +21,24 @@ class ChatTextEdit(QPlainTextEdit):
 
     submit = Signal()
 
-    def keyPressEvent(self, event) -> None:
-        if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter} and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+    def __init__(self) -> None:
+        super().__init__()
+        self._composing = False
+        self.setTabChangesFocus(True)
+
+    def inputMethodEvent(self, event: QInputMethodEvent) -> None:
+        self._composing = bool(event.preeditString())
+        super().inputMethodEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if not self._composing and event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter} and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             self.submit.emit()
             event.accept()
             return
         super().keyPressEvent(event)
 
 
-class OrbitModelCombo(QComboBox):
+class OrbitModelCombo(StyledComboBox):
     """Draw a compact chevron so the provider selector matches Orbit styling."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -60,10 +70,10 @@ class OrbitModelCombo(QComboBox):
         disabled = not self.isEnabled()
         stroke = COLORS["purple_border"]
         if self.underMouse():
-            stroke = "#CFC3FB"
+            stroke = COLORS["primary_border"]
         if self.hasFocus():
             stroke = COLORS["purple"]
-        fill = QColor(COLORS["purple_soft"] if not disabled else "#F2F3F6")
+        fill = QColor(COLORS["purple_soft"] if not disabled else COLORS["disabled_bg"])
         painter.setBrush(fill)
         painter.setPen(QPen(QColor(stroke), 1.2))
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 13, 13)
@@ -99,6 +109,7 @@ class ChatInput(QWidget):
     send_requested = Signal(str, object)
     stop_requested = Signal()
     configure_requested = Signal()
+    model_selected = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -153,6 +164,7 @@ class ChatInput(QWidget):
         self.model_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.model_combo.setMinimumContentsLength(9)
         self.model_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.model_combo.activated.connect(lambda _index: self.model_selected.emit(str(self.model_combo.currentData())))
         footer.addWidget(self.model_combo)
         self.configure_button = QPushButton("配置模型")
         self.configure_button.setObjectName("OrbitLinkButton")
@@ -176,19 +188,41 @@ class ChatInput(QWidget):
         self.setMaximumHeight(236)
         self._update_send_state()
 
+    def reapply_theme(self) -> None:
+        """Refresh composer artwork while preserving text and pending attachments."""
+        for index in range(self.model_combo.count()):
+            self.model_combo.setItemIcon(index, provider_icon(self._provider_id))
+        self.model_combo.update()
+
     def set_model(self, provider_id: str | None, provider_name: str | None, model_name: str | None,
                   has_api_key: bool = False) -> None:
         """Show only the actual active provider/model, never fabricated choices."""
+        self._provider_id = provider_id or "custom"
+        self._active_model = model_name or ""
         self.model_combo.clear()
         self._configured = bool(provider_name and model_name)
         display_model = "V4.1 Flash" if provider_id == "deepseek" and model_name == "deepseek-flash" else model_name
         label = display_model if self._configured else "尚未配置模型"
-        self.model_combo.addItem(provider_icon(provider_id or "custom"), label)
+        self.model_combo.addItem(provider_icon(provider_id or "custom"), label, model_name)
         self.model_combo.setToolTip(
             f"{provider_name} · {display_model}（API ID：{model_name}）" if self._configured else label
         )
         self.model_combo.setEnabled(self._configured)
         self.configure_button.setVisible(not has_api_key)
+
+    def set_model_options(self, models: list[str], parallel_labels: list[str]) -> None:
+        """Offer saved models through the existing rounded picker, keeping its UI."""
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        for model in dict.fromkeys([self._active_model, *models]):
+            if model:
+                label = "V4.1 Flash" if self._provider_id == "deepseek" and model == "deepseek-flash" else model
+                self.model_combo.addItem(provider_icon(self._provider_id), label, model)
+        if not self.model_combo.count():
+            self.model_combo.addItem("尚未配置模型", "")
+        self.model_combo.blockSignals(False)
+        self.privacy_label.setText("并行发送至：" + "，".join(parallel_labels) + "；附件须关闭并行后发送。"
+                                   if parallel_labels else "消息与近期上下文发送至当前服务商；附件仅按本次选择发送。")
 
     def set_text(self, text: str) -> None:
         """Fill a suggested prompt without submitting it."""

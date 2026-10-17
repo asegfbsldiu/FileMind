@@ -5,6 +5,13 @@
 local_api_keys.json
 .filemind/
 
+# ---- 本机运行数据（包括误放入仓库的副本）----
+settings.json
+chat_history.json
+workspace.json
+auth.json
+avatar.png
+
 # ---- Python 运行产物 ----
 __pycache__/
 *.py[cod]
@@ -12,6 +19,7 @@ __pycache__/
 
 # ---- 虚拟环境 ----
 .venv/
+.venv-build/
 venv/
 
 # ---- 测试与类型检查缓存 ----
@@ -27,6 +35,8 @@ build/
 dist/
 *.egg-info/
 FileMind.zip
+FileMind-Setup-*.exe
+FileMind-*-win-x64.zip
 
 # ---- 开发工具与 IDE ----
 .idea/

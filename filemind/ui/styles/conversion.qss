@@ -1,0 +1,22 @@
+/* Native Qt surfaces, independently implemented from the reference layout. */
+QWidget#ConversionPage, QScrollArea#ConversionScroll,
+QScrollArea#ConversionScroll > QWidget > QWidget { background: __page__; border: 0; }
+QLabel#ConversionSteps { background: __row_hover_b__; color: __steps_text__; border: 0;
+    border-radius: 12px; padding: 8px 16px; font-size: 10pt; font-weight: 600; }
+QFrame#ConversionDropZone { background: __conversion_drop__; border: 1px dashed __conversion_drop_border__; border-radius: 18px; }
+QFrame#ConversionDropZone:hover { background: __conversion_drop_hover__; border-color: __conversion_drop_border__; }
+QLabel#ConversionTitle { color: __text__; background: transparent; font-size: 21pt; font-weight: 700; }
+QWidget#FormatCapabilities { background: transparent; }
+QLabel#FormatSectionTitle { color: __text__; font-size: 15pt; font-weight: 700; background: transparent; }
+QLabel#FormatSectionNote { color: __muted__; font-size: 9pt; background: transparent; }
+QWidget#FormatCapabilities QFrame#CapabilityTile { border: 1px solid __input_border__; border-radius: 16px; }
+QWidget#FormatCapabilities QFrame#CapabilityTile[tint="mint"] { background: __tint_mint__; border-color: __scroll__; }
+QWidget#FormatCapabilities QFrame#CapabilityTile[tint="blue"] { background: __chat_bubble_u__; border-color: __attach_btn_hover_b__; }
+QWidget#FormatCapabilities QFrame#CapabilityTile[tint="amber"] { background: __tint_amber__; border-color: __warning_border__; }
+QWidget#FormatCapabilities QFrame#CapabilityTile[tint="lavender"] { background: __row_hover_b__; border-color: __split_handle_hover__; }
+QWidget#FormatCapabilities QLabel#TileTitle { color: __danger__; background: transparent; font-size: 12pt; font-weight: 700; }
+QWidget#FormatCapabilities QLabel#CapabilityState { color: __attach_btn__; background: transparent; font-size: 9pt; font-weight: 600; }
+QWidget#FormatCapabilities QLabel#CapabilityDetail { color: __attach_btn__; background: transparent; font-size: 10pt; }
+QWidget#FormatCapabilities QLabel#CapabilityDetail[formatList="true"] { font-weight: 600; }
+QCheckBox#ContentAnalysisToggle { color: __attach_btn__; spacing: 8px; padding: 3px 0; }
+QCheckBox#ContentAnalysisToggle:checked { color: __link__; }

@@ -8,7 +8,10 @@ from PySide6.QtWidgets import (
 
 from filemind.models import OperationPlan
 from filemind.ui.widgets.plan_filter import PlanFilterModel
-from filemind.ui.widgets.file_table import FilePlanTableModel
+from filemind.ui.widgets.file_table import (
+    CATEGORY_COLUMN, EXECUTE_COLUMN, STATUS_COLUMN, CategoryDelegate,
+    FilePlanTableModel, PlanStatusDelegate,
+)
 from filemind.ui.widgets.imported_files import ImportedFilesModel
 from filemind.ui.widgets.plan_tree import KIND_ROLE, PATH_ROLE, PlanTargetTree
 from filemind.ui.widgets.organizer_empty import OrganizerEmpty
@@ -31,6 +34,7 @@ class OrganizationWorkspace(QTabWidget):
     """Browse imported metadata first, then inspect locally checked suggestions."""
 
     choose_requested = Signal()
+    read_requested = Signal()
 
     def __init__(self, imports: ImportedFilesModel, plans: FilePlanTableModel) -> None:
         super().__init__()
@@ -41,16 +45,21 @@ class OrganizationWorkspace(QTabWidget):
         self.imports_view.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.import_stack = QStackedWidget()
         self.import_empty = OrganizerEmpty()
+        self._selected = False
+        self._scanned = False
         self.import_empty.choose_requested.connect(self.choose_requested.emit)
+        self.import_empty.read_requested.connect(self.read_requested.emit)
         self.import_stack.addWidget(self.import_empty)
         self.import_stack.addWidget(self.imports_view)
         self.addTab(self.import_stack, "导入文件 · 整理前")
-        imports.modelReset.connect(lambda: self.set_import_state(False))
+        imports.modelReset.connect(self._refresh_import_content)
         self.target_page = QWidget()
         self.target_layout = QVBoxLayout(self.target_page)
         self.target_layout.setContentsMargins(0, 0, 0, 0)
         self.empty = QLabel("先读取目录中的文件，再生成规则或 AI 整理建议。")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setWordWrap(True)
+        self.empty.setMargin(24)
         self.empty.setObjectName("Muted")
         self.target_layout.addWidget(self.empty)
         self.addTab(self.target_page, "目标目录 · 待确认")
@@ -58,9 +67,15 @@ class OrganizationWorkspace(QTabWidget):
         self.target_tree: PlanTargetTree | None = None
         self.splitter: QSplitter | None = None
 
-    def set_import_state(self, selected: bool) -> None:
+    def set_import_state(self, selected: bool, *, scanned: bool | None = None) -> None:
         """Keep guidance out of the way once real metadata exists."""
-        self.import_empty.set_selected(selected)
+        self._selected = selected
+        if scanned is not None:
+            self._scanned = scanned
+        self._refresh_import_content()
+
+    def _refresh_import_content(self) -> None:
+        self.import_empty.set_selected(self._selected, self._scanned)
         populated = bool(self.imports_view.model().rowCount())
         self.import_stack.setCurrentWidget(self.imports_view if populated else self.import_empty)
 
@@ -82,8 +97,11 @@ class OrganizationWorkspace(QTabWidget):
         proxy.setSourceModel(self.plans)
         target_view = QTableView()
         target_view.setModel(proxy)
+        target_view.setItemDelegateForColumn(CATEGORY_COLUMN, CategoryDelegate(target_view))
+        target_view.setItemDelegateForColumn(STATUS_COLUMN, PlanStatusDelegate(target_view))
         configure_file_view(target_view)
         target_view.setColumnHidden(0, True)
+        target_view.setColumnHidden(EXECUTE_COLUMN, True)
         for column, width in ((1, 240), (2, 160), (3, 160), (4, 90), (5, 220), (6, 70), (7, 180)):
             target_view.setColumnWidth(column, width)
         header = target_view.horizontalHeader()

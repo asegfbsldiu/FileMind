@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QInputMethodEvent, QKeyEvent
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
     QToolButton, QVBoxLayout, QWidget, QSplitter,
 )
@@ -14,6 +14,7 @@ from filemind.core.organization_presets import PRESETS
 from filemind.models import FileInfo, OperationPlan
 from filemind.ui.styles.icons import svg_icon
 from filemind.ui.widgets.card import Card
+from filemind.ui.widgets.combo_box import StyledComboBox
 from filemind.ui.widgets.file_table import FilePlanTableModel
 from filemind.ui.widgets.imported_files import CompactMetric, ImportedFilesModel
 from filemind.ui.widgets.organization_workspace import OrganizationWorkspace
@@ -27,6 +28,7 @@ class RuleEditor(QPlainTextEdit):
     def __init__(self) -> None:
         super().__init__()
         self._composing = False
+        self.setTabChangesFocus(True)
 
     def inputMethodEvent(self, event: QInputMethodEvent) -> None:
         self._composing = bool(event.preeditString())
@@ -63,11 +65,32 @@ class OrganizePage(QWidget):
         self._preset_index = 0
         self._preset_prompt = ""
         self._build_ui()
+        self.table_model.plan_changed.connect(self._accept_edited_plan)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
+        self._build_configuration()
+        results = self._build_results()
+        self._build_splitter(results)
+        root.addWidget(self.layout_splitter, 1)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximumHeight(5)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.hide()
+        root.addWidget(self.progress_bar)
+        root.addLayout(self._action_row())
+        self._update_mode()
+        self.rule_input.textChanged.connect(self._rule_changed)
+        self.rename_checkbox.toggled.connect(self._rule_changed)
+        self.content_checkbox.toggled.connect(self._content_changed)
+        self.setTabOrder(self.preset_combo, self.mode_combo)
+        self.setTabOrder(self.mode_combo, self.rule_input)
+        self.setTabOrder(self.rule_input, self.rule_send_button)
+        self.set_busy(False)
+
+    def _build_configuration(self) -> None:
         self.content_scroll = QScrollArea()
         self.content_scroll.setObjectName("OrganizerContentScroll")
         self.content_scroll.setWidgetResizable(True)
@@ -81,6 +104,8 @@ class OrganizePage(QWidget):
         config.addWidget(self._directory_bar())
         config.addWidget(self._rules_card())
         self.content_scroll.setWidget(body)
+
+    def _build_results(self) -> QWidget:
         results = QWidget()
         result_layout = QVBoxLayout(results)
         result_layout.setContentsMargins(0, 0, 0, 0)
@@ -90,8 +115,12 @@ class OrganizePage(QWidget):
         self.table_model = FilePlanTableModel(self)
         self.workspace = OrganizationWorkspace(self.import_model, self.table_model)
         self.workspace.choose_requested.connect(self._choose_folder)
+        self.workspace.read_requested.connect(self._request_import)
         result_layout.addWidget(self.workspace, 1)
         results.setMinimumHeight(180)
+        return results
+
+    def _build_splitter(self, results: QWidget) -> None:
         self.layout_splitter = QSplitter(Qt.Orientation.Vertical)
         self.layout_splitter.setObjectName("OrganizerSplitter")
         self.layout_splitter.setChildrenCollapsible(False)
@@ -100,19 +129,12 @@ class OrganizePage(QWidget):
         self.layout_splitter.addWidget(results)
         self.layout_splitter.setStretchFactor(1, 1)
         self.layout_splitter.setSizes([246, 500])
+        self.layout_splitter.handle(1).setAccessibleName("调整规则区和文件区高度")
         self.layout_splitter.handle(1).setToolTip("上下拖动，调整规则区与文件区的高度")
-        self.layout_splitter.splitterMoved.connect(lambda *_: self.layout_changed.emit(self.layout_splitter.sizes()[0]))
-        root.addWidget(self.layout_splitter, 1)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximumHeight(5)
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.hide()
-        root.addWidget(self.progress_bar)
-        root.addLayout(self._action_row())
-        self._update_mode()
-        self.rule_input.textChanged.connect(self._rule_changed)
-        self.rename_checkbox.toggled.connect(self._rule_changed)
-        self.set_busy(False)
+        self.layout_splitter.splitterMoved.connect(self._layout_moved)
+
+    def _layout_moved(self, _position: int, _index: int) -> None:
+        self.layout_changed.emit(self.layout_splitter.sizes()[0])
 
     def _directory_bar(self) -> Card:
         card = Card(padding=10)
@@ -142,13 +164,13 @@ class OrganizePage(QWidget):
         card = Card(padding=10)
         card.layout.setSpacing(6)
         row = QHBoxLayout()
-        self.preset_combo = QComboBox()
+        self.preset_combo = StyledComboBox()
         self.preset_combo.setMinimumWidth(0)
         for preset in PRESETS:
             self.preset_combo.addItem(preset.title, preset.key)
         self.preset_combo.currentIndexChanged.connect(self._preset_changed)
         row.addWidget(self.preset_combo, 1)
-        self.mode_combo = QComboBox()
+        self.mode_combo = StyledComboBox()
         self.mode_combo.addItem("本地规则分类", "rules")
         self.mode_combo.addItem("AI 智能整理", "ai")
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
@@ -162,6 +184,7 @@ class OrganizePage(QWidget):
         card.layout.addLayout(row)
         editor_row = QHBoxLayout()
         self.rule_input = RuleEditor()
+        self.rule_input.setAccessibleName("文件整理规则")
         self.rule_input.setMinimumHeight(58)
         self.rule_input.setMaximumHeight(68)
         self.rule_input.setPlaceholderText("描述分类规则 · Enter 发送，Shift+Enter 换行")
@@ -169,6 +192,7 @@ class OrganizePage(QWidget):
         editor_row.addWidget(self.rule_input, 1)
         self.rule_send_button = QPushButton("生成预览")
         self.rule_send_button.setObjectName("PrimaryButton")
+        self.rule_send_button.setToolTip("提交当前整理规则；生成建议后还需预览并确认执行")
         self.rule_send_button.clicked.connect(self._request_scan)
         editor_row.addWidget(self.rule_send_button)
         card.layout.addLayout(editor_row)
@@ -176,13 +200,19 @@ class OrganizePage(QWidget):
         return card
 
     def _build_rule_notes(self, card: Card) -> None:
+        self.content_checkbox = QCheckBox("理解文件内容并命名（每次发送前确认）")
+        self.content_checkbox.setObjectName("ContentAnalysisToggle")
+        self.content_checkbox.setToolTip("文档发送开头片段；图片发送压缩缩略图。默认关闭，凭据文件会排除。")
+        options = QHBoxLayout()
+        options.addWidget(self.content_checkbox, 1)
         self.ai_model_badge = QLabel("未配置模型")
         self.ai_model_badge.setObjectName("ModelStatusBadge")
         self.ai_model_badge.setMinimumWidth(0)
         self.rule_mode_note = QLabel()
         self.rule_mode_note.setObjectName("Muted")
         self.rule_mode_note.setWordWrap(True)
-        card.layout.addWidget(self.ai_model_badge)
+        options.addWidget(self.ai_model_badge)
+        card.layout.addLayout(options)
         card.layout.addWidget(self.rule_mode_note)
         self.ai_privacy_label = QLabel("将文件名、扩展名、大小、修改时间及规则发送给所选服务商；不会上传文件正文。")
         self.ai_privacy_label.setObjectName("Muted")
@@ -244,6 +274,9 @@ class OrganizePage(QWidget):
                 return
         self._preset_index, self._preset_prompt = index, preset.prompt
         self.mode_combo.setCurrentIndex(1 if preset.mode == "ai" else 0)
+        self.content_checkbox.setChecked(preset.key == "content")
+        if preset.key == "content":
+            self.rename_checkbox.setChecked(True)
         if preset.prompt:
             self.rule_input.setPlainText(preset.prompt)
         self._rule_changed()
@@ -255,14 +288,25 @@ class OrganizePage(QWidget):
     def _update_mode(self, *_args: object) -> None:
         ai = self.mode_combo.currentData() == "ai"
         self.rename_checkbox.setEnabled(ai and not self._busy)
+        self.rename_checkbox.setVisible(ai)
+        self.content_checkbox.setVisible(ai)
+        self.content_checkbox.setEnabled(ai and not self._busy)
         self.settings_link.setVisible(ai)
         self.ai_privacy_label.setVisible(ai)
         self.ai_model_badge.setVisible(ai)
         self.rule_mode_note.setVisible(not ai)
         self.rule_mode_note.setText(self.ai_status_message if ai else
-                                   "本地模式按类型或修改年月分类，自然语言不会被本地分类器理解。")
-        self.rule_send_button.setText("发送 AI 规则" if ai else "生成规则预览")
+                                   "本地按类型或年月日分类，不识别内容、不自动改名；自然语言不会被本地分类器理解。内容命名请选择 AI 内容预设。")
+        content = ai and self.content_checkbox.isChecked()
+        self.rule_send_button.setText("识别内容并生成建议" if content else "发送 AI 规则" if ai else "生成规则预览")
+        self.ai_privacy_label.setText(
+            "本次另发送文档开头片段或图片缩略图（含图中可见信息），以及文件元数据和规则；发送前需确认。"
+            if content else "将文件名、扩展名、大小、修改时间及规则发送给所选服务商；不会上传文件正文。")
         self.rule_input.setEnabled(True)
+
+    def _content_changed(self, *_args: object) -> None:
+        self._update_mode()
+        self._rule_changed()
 
     def _rule_changed(self) -> None:
         if self.plan is not None and not self._busy:
@@ -294,8 +338,10 @@ class OrganizePage(QWidget):
         for button in (self.scan_button, self.refresh_button, self.rule_send_button):
             button.setEnabled(not busy and selected)
         self.choose_button.setEnabled(not busy)
+        self.workspace.import_empty.action_button.setEnabled(not busy)
         self.mode_combo.setEnabled(not busy)
         self.preset_combo.setEnabled(not busy)
+        self.content_checkbox.setEnabled(not busy and self.mode_combo.currentData() == "ai")
         self.rename_checkbox.setEnabled(not busy and self.mode_combo.currentData() == "ai")
         self.clear_directory_button.setEnabled(selected)
         self.cancel_button.setEnabled(busy)
@@ -309,7 +355,7 @@ class OrganizePage(QWidget):
     def set_files(self, files: list[FileInfo]) -> None:
         """Display a scan snapshot without claiming that AI has analyzed it."""
         self.import_model.set_files(files)
-        self.workspace.set_import_state(bool(self.path_edit.text().strip()))
+        self.workspace.set_import_state(bool(self.path_edit.text().strip()), scanned=True)
         self.file_count.set_value(len(files))
         self.workspace.setCurrentIndex(0)
         self.summary_label.setText("已导入，等待生成建议" if files else "所选目录为空")
@@ -317,13 +363,23 @@ class OrganizePage(QWidget):
 
     def set_plan(self, plan: OperationPlan) -> None:
         """Show locally checked suggestions with truthful source counts."""
-        self.plan = plan
         self.table_model.set_plan(plan)
+        self._display_plan(plan)
+
+    def _accept_edited_plan(self) -> None:
+        """Keep inline trees and summaries in sync without resetting the editor."""
+        plan = self.table_model.current_plan()
+        if plan is not None:
+            self._display_plan(plan)
+
+    def _display_plan(self, plan: OperationPlan) -> None:
+        self.plan = plan
         self.import_model.set_files([FileInfo(item.source, item.size_bytes, item.modified_ns) for item in plan.operations])
-        self.workspace.set_import_state(bool(self.path_edit.text().strip()))
-        issues = sum(bool(item.warning) for item in plan.operations)
-        renames = sum(item.new_name != item.original_name for item in plan.operations)
-        for metric, value in ((self.file_count, len(plan.operations)), (self.pending_count, len(plan.operations) - issues),
+        self.workspace.set_import_state(bool(self.path_edit.text().strip()), scanned=True)
+        executable = [item for item in plan.operations if not item.excluded and not item.warning]
+        issues = sum(bool(item.warning) and not item.excluded for item in plan.operations)
+        renames = sum(item.new_name != item.original_name for item in executable)
+        for metric, value in ((self.file_count, len(plan.operations)), (self.pending_count, len(executable)),
                               (self.rename_count, renames), (self.issue_count, issues)):
             metric.set_value(value)
         self.summary_label.setText("待确认" if plan.operations else "目录为空")
@@ -346,7 +402,7 @@ class OrganizePage(QWidget):
         self.path_edit.setText(folder.strip())
         self.path_edit.setToolTip(folder.strip())
         self.import_model.set_files([])
-        self.workspace.set_import_state(bool(folder.strip()))
+        self.workspace.set_import_state(bool(folder.strip()), scanned=False)
         self.file_count.set_value("—")
         self.clear_plan()
         self.set_busy(self._busy)

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QStackedWidget, QTableView, QWidget, QVBoxLayout
+from PySide6.QtWidgets import (
+    QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStackedWidget, QTableView, QWidget, QVBoxLayout,
+)
 
 from filemind.models import OperationRecord
 from filemind.ui.widgets.card import Card
@@ -32,11 +34,12 @@ class HistoryTableModel(QAbstractTableModel):
         record = self.records[index.row()]
         succeeded = sum(item.get("status") == "success" for item in record.operations)
         failed = sum(item.get("status") == "failed" for item in record.operations)
+        skipped = sum(item.get("status") == "skipped" for item in record.operations)
         if role == Qt.ItemDataRole.DisplayRole:
             values = (
                 record.created_at[:19].replace("T", " "),
                 str(len(record.operations)),
-                f"成功 {succeeded} · 失败 {failed}",
+                f"成功 {succeeded} · 跳过 {skipped} · 失败 {failed}",
                 "已全部撤销" if record.undone else self._undo_state(record),
             )
             return values[index.column()]
@@ -65,6 +68,7 @@ class HistoryTableModel(QAbstractTableModel):
     def _record_tooltip(record: OperationRecord) -> str:
         errors = [str(item.get("error") or item.get("undo_error")) for item in record.operations
                   if item.get("error") or item.get("undo_error")]
+        errors.extend(f"跳过：{item['skip_reason']}" for item in record.operations if item.get("skip_reason"))
         return "\n".join(errors) if errors else f"整理目录：{record.root}"
 
 
@@ -84,6 +88,8 @@ class HistoryPage(QWidget):
         toolbar = QHBoxLayout()
         self.context_label = QLabel("先在文件整理页选择一个文件夹。")
         self.context_label.setObjectName("Muted")
+        self.context_label.setMinimumWidth(0)
+        self.context_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(self.context_label, 1)
         self.refresh_button = QPushButton("刷新")
         self.refresh_button.clicked.connect(self.refresh_requested.emit)
@@ -100,6 +106,11 @@ class HistoryPage(QWidget):
         self.table_model = HistoryTableModel(self)
         self.table = QTableView()
         self.table.setModel(self.table_model)
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self.table.verticalHeader().setDefaultSectionSize(40)
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
@@ -120,12 +131,16 @@ class HistoryPage(QWidget):
         """Refresh the table and its empty state for a selected directory."""
         self.table_model.set_records(records)
         self.context_label.setText(folder or "先在文件整理页选择一个文件夹。")
+        self.context_label.setToolTip(folder)
         self.page_stack.setCurrentIndex(1 if records else 0)
         self._update_undo_state()
 
     def _update_undo_state(self, *_args) -> None:
         selected = self.table.selectionModel().selectedRows()
-        can_undo = bool(selected) and not self.table_model.records[selected[0].row()].undone
+        record = self.table_model.records[selected[0].row()] if selected else None
+        can_undo = bool(record and not record.undone and any(
+            item.get("status") == "success" and item.get("undo_status") != "success"
+            for item in record.operations))
         self.undo_button.setEnabled(can_undo)
 
     def _undo_selected(self) -> None:

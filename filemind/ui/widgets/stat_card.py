@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from filemind.ui.widgets.card import Card
 
@@ -14,7 +14,7 @@ class StatCard(Card):
         super().__init__(parent, padding=15)
         self.setMinimumWidth(120)
         self.value_label = QLabel(value)
-        self.value_label.setStyleSheet("font-size:21pt;font-weight:700;color:#172033;")
+        self.value_label.setStyleSheet("font-size:21pt;font-weight:700;")
         self.label_label = QLabel(label)
         self.label_label.setObjectName("Muted")
         self.layout.addWidget(self.value_label)

@@ -1,0 +1,37 @@
+﻿FileMind 开源许可说明
+
+FileMind 自有源码采用 MIT 许可证。
+
+你可以使用、复制、修改、发布、分发、再许可或销售软件副本，
+条件是保留著作权声明和许可声明。软件按“原样”提供，不附带担保。
+上述中文为阅读提示，完整许可条款见下方英文原文。
+
+随应用分发的 Qt、PDFium、FFmpeg 等组件保留各自许可证。
+第三方清单及许可原文位于安装目录的 _internal\THIRD_PARTY_NOTICES.txt
+和 _internal\THIRD_PARTY_LICENSES 文件夹中。
+
+────────────────────────────────
+MIT License — 完整许可原文
+────────────────────────────────
+
+MIT License
+
+Copyright (c) 2026 asegfbsldiu
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

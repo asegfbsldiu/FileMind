@@ -1,0 +1,21 @@
+<svg width="208" height="208" viewBox="0 0 208 208" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="FileMind Logo Proposal">
+<g id="Export / App Icon 512" clip-path="url(#clip0_0_1)">
+<path id="Vector" d="M157.625 0H50.375C22.5537 0 0 22.5537 0 50.375V157.625C0 185.446 22.5537 208 50.375 208H157.625C185.446 208 208 185.446 208 157.625V50.375C208 22.5537 185.446 0 157.625 0Z" fill="url(#paint0_linear_0_1)"/>
+<path id="Vector_2" d="M61.75 34.9375H124.312L155.188 65.8125V173.062H61.75C54.4375 173.062 48.75 167.375 48.75 160.062V47.9375C48.75 40.625 54.4375 34.9375 61.75 34.9375Z" fill="white"/>
+<path id="Vector_3" d="M124.312 34.9375V65.8125H155.188" fill="#E7E0FF"/>
+<path id="Vector_4" d="M124.312 34.9375V65.8125H155.188" stroke="#E7E0FF" stroke-width="7" stroke-linejoin="round"/>
+<path id="Vector_5" d="M74.75 94.25H128.375M74.75 117.812H110.5M74.75 141.375H118.625" stroke="#7458E8" stroke-width="11" stroke-linecap="round"/>
+<path id="Vector_6" d="M137.312 119.438L140.562 127.562L148.688 130.812L140.562 134.062L137.312 142.188L134.062 134.062L125.938 130.812L134.062 127.562L137.312 119.438Z" fill="#43B7E9"/>
+</g>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_1" x1="0" y1="0" x2="208" y2="208" gradientUnits="userSpaceOnUse">
+<stop stop-color="#654CE5"/>
+<stop offset="1" stop-color="#9B72F4"/>
+</linearGradient>
+<clipPath id="clip0_0_1">
+<rect width="208" height="208" fill="white"/>
+</clipPath>
+</defs>
+</svg>

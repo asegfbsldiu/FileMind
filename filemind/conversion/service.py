@@ -10,6 +10,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 from threading import Event
+
+
 from filemind.conversion.models import ConversionInput, ConversionResult, ConversionTarget
 from filemind.conversion.base import ConversionError, Progress
 from filemind.conversion.images import RASTER_SUFFIXES, inspect_image, convert_image
@@ -35,6 +37,10 @@ def fingerprint(path: Path) -> tuple[int, int, int, int]:
 def _check_cancel(cancel: Event) -> None:
     if cancel.is_set():
         raise InterruptedError("转换已取消，未发布输出文件。")
+
+
+
+
 
 
 def inspect_input(source: Path) -> ConversionInput:
@@ -116,6 +122,8 @@ def _write_text(item: ConversionInput, key: str, staging: Path) -> None:
             value = json.loads(text)
             text = _json_to_csv(value) if key == "csv" else json.dumps(value, ensure_ascii=False, indent=2) + "\n"
     staging.write_bytes(text.encode("utf-16" if key == "utf16" else "utf-8"))
+
+
 
 
 def _write_zip(item: ConversionInput, staging: Path, progress: Progress, cancel: Event) -> None:

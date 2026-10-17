@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import QAbstractItemModel, QAbstractTableModel, QEvent, QModelIndex, Qt, Signal
+from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from filemind.core.plan_editor import PlanEditor
 from filemind.models import OperationPlan, PlannedOperation
+from filemind.ui.styles.theme import COLORS
 
 
 HEADERS = ("原路径", "目标路径", "原文件名", "建议新文件名", "分类", "整理理由", "来源", "校验状态", "执行")
@@ -42,15 +43,20 @@ class FilePlanTableModel(QAbstractTableModel):
         operation = self.operations[index.row()]
         if role == Qt.ItemDataRole.DisplayRole:
             return self._display_data(operation, index.column())
+        if role == Qt.ItemDataRole.EditRole:
+            if index.column() == NAME_COLUMN:
+                return operation.requested_name or operation.new_name
+            if index.column() == CATEGORY_COLUMN:
+                return operation.classification.category
         if role == Qt.ItemDataRole.CheckStateRole and index.column() == EXECUTE_COLUMN:
             return Qt.CheckState.Unchecked if operation.excluded else Qt.CheckState.Checked
         if role == Qt.ItemDataRole.ToolTipRole:
             return self._tooltip(operation, index.column())
         if role == Qt.ItemDataRole.ForegroundRole:
             if operation.excluded:
-                return QColor("#94A3B8")
+                return QColor(COLORS["placeholder"])
             if operation.warning:
-                return QColor("#D97706")
+                return QColor(COLORS["warning"])
         if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in (CATEGORY_COLUMN, EXECUTE_COLUMN):
             return Qt.AlignmentFlag.AlignCenter
         return None
@@ -80,7 +86,7 @@ class FilePlanTableModel(QAbstractTableModel):
             else:
                 return False
             self._apply()
-        except ValueError as error:
+        except (OSError, ValueError) as error:
             self._rollback()
             self.edit_rejected.emit(str(error))
             return False
@@ -146,6 +152,22 @@ class FilePlanTableModel(QAbstractTableModel):
         return self._display_data(operation, column)
 
 
+class ExecutionDelegate(QStyledItemDelegate):
+    """Toggle a row once, whether clicking its checkbox or the surrounding cell."""
+
+    def editorEvent(self, event: QEvent, model: QAbstractItemModel,
+                    option: QStyleOptionViewItem, index: QModelIndex) -> bool:
+        mouse = (isinstance(event, QMouseEvent) and event.type() == QEvent.Type.MouseButtonRelease
+                 and event.button() == Qt.MouseButton.LeftButton)
+        keyboard = (isinstance(event, QKeyEvent) and event.type() == QEvent.Type.KeyPress
+                    and event.key() in {Qt.Key.Key_Space, Qt.Key.Key_Select})
+        if not (mouse or keyboard):
+            return event.type() in {QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick}
+        checked = index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+        state = Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked
+        return model.setData(index, state, Qt.ItemDataRole.CheckStateRole)
+
+
 class CategoryDelegate(QStyledItemDelegate):
     """Draw category cells as soft pills without replacing the model data."""
 
@@ -154,13 +176,37 @@ class CategoryDelegate(QStyledItemDelegate):
             super().paint(painter, option, index)
             return
         text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
-        background = CATEGORY_COLORS.get(text, "#F1F5F9")
+        token = {"文档": "primary_soft", "图片": "purple_soft", "视频": "tint_blue"}.get(text, "surface")
+        background = COLORS[token]
         rect = option.rect.adjusted(12, 8, -12, -8)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(background))
         painter.drawRoundedRect(rect, 8, 8)
-        painter.setPen(QColor("#475569"))
+        painter.setPen(QColor(COLORS["text"]))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
+
+
+class PlanStatusDelegate(QStyledItemDelegate):
+    """Show concise state pills while preserving complete reasons in tooltips."""
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        state = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        if "已排除" in state:
+            text, foreground, background = "已排除", COLORS["muted"], COLORS["disabled_bg"]
+        elif state == "通过":
+            text, foreground, background = "已校验", COLORS["success"], COLORS["tint_mint"]
+        else:
+            text = "冲突 · 跳过" if "同名" in state or "冲突" in state else "待确认 · 跳过"
+            foreground, background = COLORS["warning"], COLORS["warning_soft"]
+        rect = option.rect.adjusted(8, 9, -8, -9)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(background))
+        painter.drawRoundedRect(rect, 7, 7)
+        painter.setPen(QColor(foreground))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
         painter.restore()

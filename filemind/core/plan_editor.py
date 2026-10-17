@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from filemind.core.planner import (PlanEntry, assemble_plan, validate_category,
+from filemind.core.planner import (PlanEntry, assemble_plan, name_suffixes, validate_category,
                                    validate_file_name, validate_relative_subdirectory)
 from filemind.models import OperationPlan, PlannedOperation
 
@@ -59,7 +59,7 @@ class PlanEditor:
 
     def set_target_subdirectory(self, source: Path, directory: str) -> None:
         """Store a validated subdirectory below the category."""
-        text = directory.strip().strip("/")
+        text = directory.strip()
         validate_relative_subdirectory(text)
         self._replace(source, target_subdirectory=text, review_note="")
 
@@ -71,9 +71,9 @@ class PlanEditor:
             self._replace(source, requested_name=row.original_name, review_note="")
             return
         validate_file_name(text)
-        original_suffix = Path(row.original_name).suffix.lower()
-        if Path(text).suffix.lower() != original_suffix:
-            raise ValueError(f"新文件名必须保留原扩展名：{original_suffix or '无扩展名'}")
+        original_suffix = name_suffixes(row.original_name)
+        if name_suffixes(text) != original_suffix:
+            raise ValueError(f"新文件名必须保留原扩展名：{''.join(original_suffix) or '无扩展名'}")
         self._replace(source, requested_name=text, review_note="")
 
     def set_excluded(self, source: Path, excluded: bool) -> None:
@@ -82,12 +82,16 @@ class PlanEditor:
 
     def counts(self) -> tuple[int, int, int]:
         """Return ``(total, executable, skipped)`` for the current edits."""
-        total = len(self._rows)
-        skipped = sum(1 for row in self._rows if row.excluded)
+        operations = self.build().operations
+        total = len(operations)
+        skipped = sum(item.excluded or bool(item.warning) for item in operations)
         return total, total - skipped, skipped
 
     def build(self) -> OperationPlan:
         """Rebuild the plan from the current rows."""
+        return self._assemble(self._rows)
+
+    def _assemble(self, rows: list[EditableRow]) -> OperationPlan:
         entries = [
             PlanEntry(
                 source=row.source,
@@ -101,7 +105,7 @@ class PlanEditor:
                 excluded=row.excluded,
                 review_note=row.review_note,
             )
-            for row in self._rows
+            for row in rows
         ]
         return assemble_plan(self.root, entries)
 
@@ -113,8 +117,10 @@ class PlanEditor:
 
     def _replace(self, source: Path, **changes: object) -> None:
         self._require(source)
-        self._rows = [replace(item, **changes) if item.source == source else item
-                      for item in self._rows]
+        candidate = [replace(item, **changes) if item.source == source else item
+                     for item in self._rows]
+        self._assemble(candidate)
+        self._rows = candidate
 
 
 def _row_from(operation: PlannedOperation) -> EditableRow:

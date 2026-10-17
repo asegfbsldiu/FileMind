@@ -22,8 +22,9 @@ from PySide6.QtWidgets import (
 )
 
 from filemind.models import OperationPlan
+from filemind.ui.styles.icons import svg_icon
 from filemind.ui.widgets.file_table import (CategoryDelegate, EXECUTE_COLUMN, FilePlanTableModel,
-                                            STATUS_COLUMN)
+                                            STATUS_COLUMN, ExecutionDelegate, PlanStatusDelegate)
 from filemind.ui.widgets.plan_tree import KIND_ROLE, PATH_ROLE, PlanTargetTree
 from filemind.ui.widgets.plan_filter import PlanFilterModel
 
@@ -51,6 +52,7 @@ class PlanPreviewDialog(QDialog):
         self.proxy_model.setSourceModel(source_model)
         self.source_model.plan_changed.connect(self._plan_edited)
         self.source_model.edit_rejected.connect(self._edit_rejected)
+        self.finished.connect(self._detach_model)
         self._build_ui()
         self._filter_table(self.tree.currentItem(), None)
 
@@ -74,15 +76,20 @@ class PlanPreviewDialog(QDialog):
         detail_layout.addWidget(self.table, 1)
         detail_layout.addWidget(self.details_frame)
         self.splitter.addWidget(detail_panel)
-        self.splitter.setSizes((350, 680))
+        self.splitter.setSizes((280, max(480, self.width() - 340)))
         layout.addWidget(self.splitter, 1)
         self._build_actions(layout)
         self._update_summary()
 
     def _build_header(self, layout: QVBoxLayout) -> None:
+        title_row = QHBoxLayout()
         self.header = QLabel(f"本次整理涉及 {len(self.plan.operations)} 个文件")
         self.header.setObjectName("PreviewTitle")
-        layout.addWidget(self.header)
+        title_row.addWidget(self.header, 1)
+        self.preview_badge = QLabel("本地校验 · 尚未执行")
+        self.preview_badge.setObjectName("PreviewBadge")
+        title_row.addWidget(self.preview_badge)
+        layout.addLayout(title_row)
         self.summary = QLabel()
         self.summary.setObjectName("Muted")
         self.summary.setWordWrap(True)
@@ -102,6 +109,8 @@ class PlanPreviewDialog(QDialog):
         toolbar.addWidget(self.search_edit, 1)
         expand = QPushButton("展开全部")
         collapse = QPushButton("折叠全部")
+        expand.setIcon(svg_icon("folder_open"))
+        collapse.setIcon(svg_icon("folder_plan"))
         expand.clicked.connect(lambda: self.tree.expandAll())
         collapse.clicked.connect(lambda: self.tree.collapseAll())
         toolbar.addWidget(expand)
@@ -113,6 +122,8 @@ class PlanPreviewDialog(QDialog):
         self.table.setObjectName("PlanDetailTable")
         self.table.setModel(self.proxy_model)
         self.table.setItemDelegateForColumn(4, CategoryDelegate(self.table))
+        self.table.setItemDelegateForColumn(EXECUTE_COLUMN, ExecutionDelegate(self.table))
+        self.table.setItemDelegateForColumn(STATUS_COLUMN, PlanStatusDelegate(self.table))
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
@@ -123,14 +134,15 @@ class PlanPreviewDialog(QDialog):
                                    | QTableView.EditTrigger.EditKeyPressed)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.horizontalHeader().setMinimumSectionSize(100)
+        self.table.horizontalHeader().setMinimumSectionSize(42)
         for column in (0, 1, 5):
             self.table.setColumnHidden(column, True)
-        for column, width in ((2, 145), (3, 145), (4, 80), (6, 60), (STATUS_COLUMN, 165)):
+        for column, width in ((2, 145), (3, 145), (4, 80), (6, 60), (STATUS_COLUMN, 140)):
             self.table.setColumnWidth(column, width)
-        self.table.setColumnWidth(EXECUTE_COLUMN, 62)
+        self.table.setColumnWidth(EXECUTE_COLUMN, 52)
+        header = self.table.horizontalHeader()
+        header.moveSection(header.visualIndex(EXECUTE_COLUMN), 0)
         self.table.selectionModel().currentRowChanged.connect(self._show_selected_details)
-        self.table.clicked.connect(self._toggle_excluded)
 
     def _build_details_panel(self) -> None:
         self.details_frame = QFrame()
@@ -139,6 +151,9 @@ class PlanPreviewDialog(QDialog):
         form.setContentsMargins(12, 10, 12, 10)
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(5)
+        heading = QLabel("文件详情")
+        heading.setObjectName("PreviewDetailsTitle")
+        form.addRow(heading)
         self.detail_original = self._add_detail_row(form, "原文件")
         self.detail_source = self._add_detail_row(form, "原路径")
         self.detail_target = self._add_detail_row(form, "目标路径")
@@ -166,6 +181,7 @@ class PlanPreviewDialog(QDialog):
                              "尚未执行任何文件操作")
         self.notice.setText(self._notice_text(len(skipped), len(executable)))
         self.notice.setProperty("hasWarnings", bool(skipped))
+        self.preview_badge.setText("含跳过项 · 尚未执行" if skipped else "本地校验 · 尚未执行")
         self._refresh_notice_style()
         self.execute_button.setEnabled(bool(executable))
 
@@ -201,6 +217,11 @@ class PlanPreviewDialog(QDialog):
         self._refresh_notice_style()
         self.notice.setToolTip(message)
 
+    def _detach_model(self, _result: int) -> None:
+        """Closed previews must not retain subscriptions to later editing sessions."""
+        self.source_model.plan_changed.disconnect(self._plan_edited)
+        self.source_model.edit_rejected.disconnect(self._edit_rejected)
+
     def _rebuild_tree(self) -> None:
         """Replace the tree in place so the splitter position is preserved."""
         previous = self.tree
@@ -213,17 +234,10 @@ class PlanPreviewDialog(QDialog):
         self.tree.expandToDepth(1)
         self._filter_table(self.tree.currentItem(), None)
 
-    def _toggle_excluded(self, index: QModelIndex) -> None:
-        """Let one click in the 执行 column skip or restore that row."""
-        if index.column() != EXECUTE_COLUMN:
-            return
-        current = index.data(Qt.ItemDataRole.CheckStateRole)
-        target = Qt.CheckState.Unchecked if current == Qt.CheckState.Checked else Qt.CheckState.Checked
-        self.source_model.setData(index, target, Qt.ItemDataRole.CheckStateRole)
-
     def _build_actions(self, layout: QVBoxLayout) -> None:
         actions = QHBoxLayout()
         self.rescan_button = QPushButton("重新扫描")
+        self.rescan_button.setIcon(svg_icon("scan"))
         self.rescan_button.clicked.connect(self._request_rescan)
         self.close_button = QPushButton("关闭")
         self.close_button.clicked.connect(self.reject)
@@ -269,7 +283,8 @@ class PlanPreviewDialog(QDialog):
             f"{operation.classification.category} · {operation.classification.reason}"
         )
         action = _operation_label(operation.source, operation.target, operation.original_name, operation.new_name)
-        self.detail_operation.setText(f"{action} · {operation.warning or '本地安全校验通过'}")
+        state = "已排除，本次不会移动" if operation.excluded else operation.warning or "本地安全校验通过"
+        self.detail_operation.setText(f"{action} · {state}")
         self.detail_source.setToolTip(str(operation.source))
         self.detail_target.setToolTip(str(operation.target))
 

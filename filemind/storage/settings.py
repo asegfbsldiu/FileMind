@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Sequence
 
-from filemind.ai.providers import ENVIRONMENT_KEY_NAMES, PROVIDER_BY_ID
+from filemind.ai.model_config import ModelConfig
+
+from filemind.ai.providers import ENVIRONMENT_KEY_NAMES, PROVIDER_BY_ID, is_local_connection
 from filemind.storage.paths import config_dir
 
 
@@ -32,6 +34,8 @@ class AISettings:
     api_key: str = ""
     store_key_locally: bool = False
     api_key_source: str = "未配置"
+    local: bool = False
+    model_options: tuple[str, ...] = ()
 
 
 class SettingsError(RuntimeError):
@@ -47,6 +51,22 @@ class SettingsStore:
         self.local_secrets_path = self.settings_path.with_name("local_api_keys.json")
         self.project_root = project_root or Path(__file__).resolve().parents[2]
         self.secret_store = secret_store if secret_store is not None else _default_secret_store()
+
+    def get_appearance(self) -> str:
+        """Read only the non-secret appearance preference, without resolving keys."""
+        value = self._read_settings().get("appearance", "light")
+        return value if value in ("light", "dark", "system", "green", "orange") else "light"
+
+    def set_appearance(self, appearance: str) -> None:
+        """Persist a validated theme while preserving all provider settings."""
+        if appearance not in ("light", "dark", "system", "green", "orange"):
+            raise SettingsError("不支持的主题色调。")
+        payload = self._read_settings()
+        payload["appearance"] = appearance
+        try:
+            self._atomic_write(self.settings_path, payload)
+        except OSError as error:
+            raise SettingsError("主题无法保存，请检查配置目录权限。") from error
 
     def load(self, provider_id: str | None = None) -> AISettings:
         """Load saved provider values with explicit secret-source precedence."""
@@ -65,6 +85,8 @@ class SettingsStore:
             model=str(profile.get("model", preset.model)),
             timeout_seconds=_valid_timeout(profile.get("timeout_seconds", 45)),
             store_key_locally=bool(profile.get("store_key_locally", False)),
+            local=is_local_connection(active_id, str(profile.get("base_url", preset.base_url))),
+            model_options=_string_tuple(profile.get("model_options")),
         )
         api_key, source = self._load_secret(settings)
         return AISettings(**{**asdict(settings), "api_key": api_key, "api_key_source": source})
@@ -83,9 +105,13 @@ class SettingsStore:
             "store_key_locally": settings.store_key_locally,
         }
         payload["active_provider"] = settings.provider_id
+        profiles[settings.provider_id]["model_options"] = list(settings.model_options)
         if online_ai_consent is not None:
             payload["online_ai_consent"] = online_ai_consent
-        if settings.api_key.strip():
+        if settings.provider_id == "ollama":
+            if not is_local_connection(settings.provider_id, settings.base_url):
+                raise SettingsError("本地 Ollama 仅允许本机回环地址；远程地址请使用自定义兼容接口。")
+        elif settings.api_key.strip():
             self._save_secret(settings)
         else:
             self._delete_secret(settings.provider_id)
@@ -119,7 +145,109 @@ class SettingsStore:
         consents[provider_id] = accepted
         self._atomic_write(self.settings_path, payload)
 
+    def save_model_options(self, provider_id: str, models: Sequence[str]) -> None:
+        """Persist only the detected model list for a provider without touching secrets."""
+        if provider_id not in PROVIDER_BY_ID:
+            raise SettingsError("未知的 AI 服务商配置。")
+        payload = self._read_settings()
+        profiles = payload.setdefault("profiles", {})
+        if not isinstance(profiles, dict):
+            raise SettingsError("本地设置文件格式无效。")
+        profile = profiles.setdefault(provider_id, {})
+        if not isinstance(profile, dict):
+            raise SettingsError("本地设置文件格式无效。")
+        cleaned = [str(model).strip() for model in models if str(model).strip()]
+        if cleaned:
+            profile["model_options"] = list(dict.fromkeys(cleaned))
+        else:
+            profile.pop("model_options", None)
+        self._atomic_write(self.settings_path, payload)
+
+    def set_active_model(self, provider_id: str, model_name: str) -> None:
+        """Switch the active model for a provider without touching its secret source."""
+        if provider_id not in PROVIDER_BY_ID:
+            raise SettingsError("未知的 AI 服务商配置。")
+        model_name = model_name.strip()
+        if not model_name:
+            raise SettingsError("模型名称不能为空。")
+        payload = self._read_settings()
+        profiles = payload.setdefault("profiles", {})
+        if not isinstance(profiles, dict):
+            raise SettingsError("本地设置文件格式无效。")
+        profile = profiles.setdefault(provider_id, {})
+        if not isinstance(profile, dict):
+            raise SettingsError("本地设置文件格式无效。")
+        profile["model"] = model_name
+        payload["active_provider"] = provider_id
+        self._atomic_write(self.settings_path, payload)
+
+    def load_models(self) -> list[ModelConfig]:
+        """Return the ordered multi-model selection with runtime keys resolved.
+
+        Falls back to a single entry derived from the active provider profile so
+        existing installations keep working after the multi-model upgrade.
+        """
+        payload = self._read_settings()
+        raw_models = payload.get("models")
+        if isinstance(raw_models, list):
+            configs = [config for item in raw_models
+                       if (config := ModelConfig.from_dict(item)) is not None]
+            return [self._with_resolved_key(config) for config in configs]
+        settings = self.load()
+        return [self._with_resolved_key(ModelConfig(
+            provider=settings.provider_id, model=settings.model, base_url=settings.base_url,
+            api_key_env=ENVIRONMENT_KEY_NAMES.get(settings.provider_id, ""),
+            timeout_seconds=settings.timeout_seconds, api_key=settings.api_key))]
+
+    def save_models(self, models: Sequence[ModelConfig], parallel_enabled: bool | None = None) -> None:
+        """Persist the ordered selection and enabled flags; keys are never written."""
+        payload = self._read_settings()
+        payload["models"] = [config.to_dict() for config in models]
+        if len(models) > 20:
+            raise SettingsError("最多保存 20 个模型；一次最多并行启用 4 个。")
+        if any(config.provider not in PROVIDER_BY_ID for config in models):
+            raise SettingsError("模型列表包含未知服务商。")
+        if len({config.identity for config in models}) != len(models):
+            raise SettingsError("模型列表存在重复项。")
+        if parallel_enabled is not None:
+            if parallel_enabled and not 1 <= sum(config.enabled for config in models) <= 4:
+                raise SettingsError("并行模式需要启用 1–4 个模型。")
+            payload["parallel_models"] = bool(parallel_enabled)
+        self._atomic_write(self.settings_path, payload)
+
+    def is_parallel_mode_enabled(self) -> bool:
+        """Return whether Orbit should fan a message out to every enabled model."""
+        return bool(self._read_settings().get("parallel_models", False))
+
+    def set_parallel_mode(self, enabled: bool) -> None:
+        """Persist the opt-in parallel Orbit mode."""
+        payload = self._read_settings()
+        payload["parallel_models"] = bool(enabled)
+        self._atomic_write(self.settings_path, payload)
+
+    def _with_resolved_key(self, config: ModelConfig) -> ModelConfig:
+        """Preserve OS credential priority and bind profile keys to their endpoint."""
+        if config.provider not in PROVIDER_BY_ID:
+            return config.with_api_key("")
+        profile = self.load(config.provider)
+        endpoint = config.base_url.strip() or profile.base_url
+        resolved = replace(config, base_url=endpoint)
+        if config.provider == "ollama":
+            return resolved.with_api_key("")
+        matches = endpoint.rstrip("/") == profile.base_url.rstrip("/")
+        if matches and profile.api_key:
+            return resolved.with_api_key(profile.api_key)
+        if config.api_key_env:
+            return resolved.with_api_key(os.environ.get(config.api_key_env, "").strip())
+        return resolved.with_api_key("")
+
+    def resolve_model(self, config: ModelConfig) -> ModelConfig:
+        """Resolve the visible entry for one request without saving or changing profiles."""
+        return self._with_resolved_key(config)
+
     def _load_secret(self, settings: AISettings) -> tuple[str, str]:
+        if settings.local:
+            return "", "本机模型无需密钥"
         if self.secret_store:
             try:
                 saved_value = self.secret_store.get(_credential_target(settings.provider_id))
@@ -130,7 +258,7 @@ class SettingsStore:
         local_secret = self._read_local_secret(settings.provider_id) if settings.store_key_locally else ""
         if local_secret:
             return local_secret, "本地明文配置文件"
-        environment_value = os.environ.get(ENVIRONMENT_KEY_NAMES[settings.provider_id], "").strip()
+        environment_value = os.environ.get(ENVIRONMENT_KEY_NAMES.get(settings.provider_id, ""), "").strip()
         if not environment_value and settings.provider_id == "deepseek":
             environment_value = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         if environment_value:
@@ -247,6 +375,13 @@ def _valid_timeout(value: object) -> int:
     except (TypeError, ValueError):
         return 45
     return min(max(timeout, 5), 180)
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    """Decode model IDs without coercing unexpected objects into names."""
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(dict.fromkeys(item.strip() for item in value if isinstance(item, str) and item.strip()))
 
 
 def _restrict_permissions(path: Path) -> None:

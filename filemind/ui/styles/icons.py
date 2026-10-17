@@ -3,9 +3,16 @@
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
+from filemind.ui.styles.theme import COLORS, is_dark_active
+
+
+PROVIDER_LOGO_FILES = {name: f"{name}.png" for name in (
+    "dashscope", "deepseek", "doubao", "hunyuan", "kimi", "ollama", "openai",
+    "qwen", "siliconflow", "volcengine", "wenxin", "zhipu",
+)}
 
 PROVIDER_MARKS = {
     "deepseek": ("#4569E8", '<path d="M5 13c2-6 10-7 13-2 2 4-2 8-6 7-2-.4-3-2-3-4"/><path d="M5 13 3 9m2 4 4-1m7-5 2-3m-2 3 4 1"/><circle cx="12" cy="13" r="1" fill="#4569E8" stroke="none"/>'),
@@ -17,6 +24,10 @@ PROVIDER_MARKS = {
 
 
 ICON_PATHS = {
+    "search": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/>',
+    "plus": '<path d="M12 5v14M5 12h14"/>',
+    "trash": '<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6m4-6v6"/>',
+    "orbit": '<circle cx="12" cy="12" r="5"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(-32 12 12)"/><circle cx="18.5" cy="5.5" r="1.2" fill="currentColor" stroke="none"/>',
     "user": '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
     "sidebar": '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16m-3-8h.01"/>',
     "convert": '<path d="M4 7h14l-3-3m3 3-3 3M20 17H6l3 3m-3-3 3-3"/>',
@@ -42,8 +53,9 @@ ICON_PATHS = {
 }
 
 
-def svg_icon(name: str, color: str = "#64748B", size: int = 22) -> QIcon:
+def svg_icon(name: str, color: str | None = None, size: int = 22) -> QIcon:
     """Create a scalable icon for one of the known FileMind symbols."""
+    color = color or COLORS["muted"]
     paths = ICON_PATHS[name]
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">{paths}</svg>'
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
@@ -56,12 +68,19 @@ def svg_icon(name: str, color: str = "#64748B", size: int = 22) -> QIcon:
 
 
 def provider_icon(provider_id: str, size: int = 20) -> QIcon:
-    """Render a small offline vector mark for the selected provider."""
-    if provider_id == "deepseek":
-        logo_path = Path(__file__).parent.parent / "assets" / "deepseek-logo.png"
+    """Use bundled provider artwork, with a visible fallback for missing assets."""
+    logo_file = PROVIDER_LOGO_FILES.get(provider_id)
+    if logo_file:
+        if provider_id == "ollama" and is_dark_active():
+            logo_file = "ollama_dark.png"
+        logo_path = Path(__file__).parent.parent / "assets" / "provider_logos" / logo_file
         if logo_path.is_file():
-            return QIcon(str(logo_path))
+            pixmap = QPixmap(str(logo_path))
+            if not pixmap.isNull():
+                return QIcon(pixmap)
     color, paths = PROVIDER_MARKS.get(provider_id, PROVIDER_MARKS["custom"])
+    if provider_id not in PROVIDER_LOGO_FILES:
+        color = COLORS["muted"]
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" '
            f'viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.8" '
            f'stroke-linecap="round" stroke-linejoin="round">{paths}</svg>')

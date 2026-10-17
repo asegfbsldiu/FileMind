@@ -11,10 +11,11 @@ from PySide6.QtCore import Qt, QSize, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFrame,
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QListWidget,
+    QLineEdit,
     QListWidgetItem,
     QMainWindow,
     QMenu,
@@ -31,24 +32,33 @@ from PySide6.QtWidgets import (
 
 from filemind.ai.base import ProgressCallback
 from filemind.ai.chat_service import ChatService
+from filemind.ai.adapters import build_provider
+from filemind.ai.chat_result import MultiModelResult
+from filemind.ai.model_config import ModelConfig
+from filemind.ai.multi_model import run_models
+from filemind.ai.chat_prompts import ORBIT_SYSTEM_PROMPT
 from filemind.ai.openai_compatible import AIServiceError, OpenAICompatibleClient
-from filemind.ai.providers import PROVIDER_BY_ID
+from filemind.ai.providers import PROVIDER_BY_ID, is_local_connection
 from filemind.ai.schemas import file_metadata
 from filemind.chat_models import ChatConversation
-from filemind.storage.chat_history import ChatHistoryError, ChatHistoryStore
+from filemind.storage.chat_history import MAX_CONVERSATIONS, MAX_MESSAGE_LENGTH, ChatHistoryError, ChatHistoryStore
 from filemind.storage.history import OperationHistory
 from filemind.storage.settings import AISettings, SettingsError, SettingsStore
 from filemind.storage.local_lock import LocalLockStore
 from filemind.storage.workspace import WorkspaceError, WorkspaceStore
-from filemind.ui.widgets.local_account import avatar_icon
+from filemind.ui.widgets.local_account import LocalAccountButton, avatar_icon
+from filemind.ui.branding import application_icon
+from filemind.ui.dialogs.user_name import UserNameDialog
 from filemind.ui.pages.assistant_page import AssistantPage
 from filemind.ui.pages.history_page import HistoryPage
 from filemind.ui.pages.organize_page import OrganizePage
 from filemind.ui.pages.settings_page import SettingsPage
+from filemind.ui.pages.local_settings_page import LocalSettingsPage
 from filemind.ui.pages.conversion_page import ConversionPage
 from filemind.ui.dialogs.plan_preview import PlanPreviewDialog
 from filemind.ui.styles.icons import svg_icon
-from filemind.ui.widgets.conversation_row import ConversationRow
+from filemind.ui.styles.theme import COLORS, apply_theme
+from filemind.ui.widgets.conversation_row import ROW_HEIGHT, ConversationList, ConversationRow
 from filemind.ui.widgets.privacy_dialog import OrbitPrivacyDialog
 from filemind.core.organization_presets import classify_with_preset
 from filemind.core.executor import ExecutionResult, execute_plan, undo_record
@@ -63,9 +73,10 @@ NAVIGATION_ITEMS: tuple[tuple[str, str, str, str, str], ...] = (
     ("assistant", "Orbit AI 助手", "assistant", "Orbit AI 助手", "你的智能工作伙伴。"),
     ("conversion", "格式转换", "convert", "文件格式转换", "选择一个文件，在本机转换并保存到新位置。"),
     ("history", "整理历史", "history", "整理历史", "查看操作结果；需要时可以安全撤销。"),
-    ("settings", "设置", "settings", "设置", "查看 AI 配置与文件隐私状态。"),
+    ("settings", "模型配置", "settings", "模型配置", "管理服务商、API 连接与多模型并行调用。"),
 )
 PAGE_INFO = {key: (title, subtitle) for key, _label, _icon, title, subtitle in NAVIGATION_ITEMS}
+PAGE_INFO["appsettings"] = ("设置", "外观、本机工作空间与数据隐私。")
 LOGGER = logging.getLogger(__name__)
 
 
@@ -80,7 +91,9 @@ class MainWindow(QMainWindow):
                  lock_store: LocalLockStore | None = None,
                  workspace_store: WorkspaceStore | None = None) -> None:
         super().__init__()
-        self.setWindowTitle("FileMind · 文件整理助手")
+        # Qt uses the application display name when no custom caption is set.
+        self.setWindowTitle("")
+        self.setWindowIcon(application_icon())
         self.resize(1280, 850)
         self.setMinimumSize(1024, 700)
         self.settings_store = settings_store or SettingsStore()
@@ -114,14 +127,7 @@ class MainWindow(QMainWindow):
         self.assistant_page.stop_requested.connect(self._cancel_chat_task)
         self.assistant_page.configure_requested.connect(lambda: self._show_page("settings"))
         self.settings_page.configuration_changed.connect(self._refresh_assistant_model)
-        self.organize_page.cancel_button.clicked.connect(self._cancel_task)
-        self.history_page.refresh_requested.connect(self._refresh_history)
-        self.history_page.undo_requested.connect(self._confirm_undo)
-        self.history_page.cancel_requested.connect(self._cancel_task)
-        self.settings_page.test_requested.connect(self._test_ai_connection)
-        self.settings_page.cancel_requested.connect(self._cancel_task)
-        self.settings_page.local_auth_requested.connect(self._request_local_auth)
-        self.settings_page.set_local_lock_available(self.lock_store is not None)
+        self._connect_workspace_actions()
         self.new_chat_button.clicked.connect(self._new_chat)
         self.conversation_list.itemClicked.connect(self._select_chat_item)
         self.conversation_list.currentRowChanged.connect(self._update_conversation_selection)
@@ -130,7 +136,20 @@ class MainWindow(QMainWindow):
         self._show_page("organize")
         self.conversion_page.job_finished.connect(self._conversion_finished)
         self.organize_page.layout_changed.connect(self._organizer_resized)
-        QTimer.singleShot(0, lambda: self.organize_page.layout_splitter.setSizes([self._organizer_height, 500]))
+        QTimer.singleShot(0, self._restore_organizer_height)
+
+    def _connect_workspace_actions(self) -> None:
+        self.organize_page.cancel_button.clicked.connect(self._cancel_task)
+        self.history_page.refresh_requested.connect(self._refresh_history)
+        self.history_page.undo_requested.connect(self._confirm_undo)
+        self.history_page.cancel_requested.connect(self._cancel_task)
+        self.settings_page.test_requested.connect(self._test_ai_connection)
+        self.settings_page.cancel_requested.connect(self._cancel_task)
+        self._connect_model_controls()
+        self.local_settings_page.local_auth_requested.connect(self._request_local_auth)
+        self.local_settings_page.set_local_lock_available(self.lock_store is not None)
+        self.local_settings_page.appearance_changed.connect(self._apply_appearance)
+        QApplication.instance().styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
 
     def _initialize_workspace(self, store: WorkspaceStore | None, settings: object) -> None:
         path = getattr(settings, "settings_path", None)
@@ -145,10 +164,71 @@ class MainWindow(QMainWindow):
         self._sidebar_width = preferences.sidebar_width
         self._sidebar_collapsed = preferences.sidebar_collapsed
         self._organizer_height = preferences.organizer_height
+        self._reduced_motion = preferences.reduced_motion
+        self._user_name = preferences.user_name
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
         self._layout_timer.setInterval(200)
         self._layout_timer.timeout.connect(self._save_workspace_layout)
+        self._initialize_appearance()
+
+    def _initialize_appearance(self) -> None:
+        getter = getattr(self.settings_store, "get_appearance", None)
+        try:
+            self._appearance = getter() if callable(getter) else "light"
+        except (SettingsError, OSError, ValueError):
+            self._appearance = "light"
+            LOGGER.warning("Appearance preference could not be read; using light theme.")
+        apply_theme(QApplication.instance(), self._appearance)
+
+    def _apply_appearance(self, appearance: str) -> None:
+        self._appearance = appearance
+        apply_theme(QApplication.instance(), appearance)
+        for widget in self.findChildren(QWidget):
+            refresh = getattr(widget, "reapply_theme", None)
+            if callable(refresh):
+                refresh()
+            widget.update()
+        self.sidebar_toggle.setIcon(svg_icon("sidebar", COLORS["muted"]))
+        self.local_settings_action.setIcon(svg_icon("settings", COLORS["muted"]))
+        for key, _label, icon, _title, _subtitle in NAVIGATION_ITEMS:
+            self.nav_buttons[key].setIcon(svg_icon(icon, COLORS["muted"]))
+
+    def _system_scheme_changed(self, _scheme: Qt.ColorScheme) -> None:
+        if self._appearance == "system":
+            self._apply_appearance("system")
+
+    def _connect_model_controls(self) -> None:
+        self.settings_page.parallel_test_requested.connect(self._test_multiple_models)
+        self.settings_page.refresh_models_requested.connect(self._refresh_local_models)
+        self.settings_page.ollama_models_requested.connect(self._detect_ollama_models)
+        for composer in (self.assistant_page.home_composer, self.assistant_page.chat_composer):
+            composer.model_selected.connect(self._select_orbit_model)
+
+    def _select_orbit_model(self, model: str) -> None:
+        """Switch only the model field, preserving the saved endpoint and credentials."""
+        try:
+            settings = self.settings_store.load()
+            self.settings_store.set_active_model(settings.provider_id, model)
+        except (SettingsError, OSError, ValueError) as error:
+            self.assistant_page.show_error(f"模型切换失败：{error}", self._chat_conversation_id or "")
+        self._refresh_assistant_model()
+
+    def _refresh_orbit_choices(self, settings: AISettings) -> None:
+        loader = getattr(self.settings_store, "load_models", None)
+        if not callable(loader):
+            return
+        try:
+            configs = loader()
+            models = [config.model for config in configs if config.provider == settings.provider_id
+                      and config.base_url.rstrip("/") == settings.base_url.rstrip("/")]
+            models.extend(settings.model_options)
+            parallel = self.settings_store.is_parallel_mode_enabled()
+            labels = [config.label for config in configs if config.enabled] if parallel else []
+            for composer in (self.assistant_page.home_composer, self.assistant_page.chat_composer):
+                composer.set_model_options(models, labels)
+        except (SettingsError, OSError, ValueError) as error:
+            self.settings_page.multi_status.setText(f"模型列表读取失败：{error}")
 
     def _refresh_assistant_model(self) -> None:
         """Reflect the current shared provider profile without exposing its key."""
@@ -161,13 +241,14 @@ class MainWindow(QMainWindow):
         preset = PROVIDER_BY_ID.get(settings.provider_id)
         provider_name = preset.name if preset else settings.provider_id
         self.assistant_page.set_model(settings.provider_id, provider_name, settings.model or None,
-                                      bool(settings.api_key.strip()))
-        is_ready = bool(settings.base_url.strip() and settings.model.strip() and settings.api_key.strip())
+                                      bool(settings.api_key.strip()) or settings.local)
+        self._refresh_orbit_choices(settings)
+        is_ready = _is_usable_ai_settings(settings)
         if is_ready:
             self.organize_page.set_ai_configuration_status(
                 f"已配置 {provider_name} · {settings.model}，尚未确认当前连接状态。", True
             )
-        elif not settings.api_key.strip():
+        elif not settings.api_key.strip() and not settings.local:
             self.organize_page.set_ai_configuration_status("未配置：缺少 API Key。", False)
         elif not settings.base_url.strip():
             self.organize_page.set_ai_configuration_status("未配置：Base URL 为空。", False)
@@ -181,6 +262,10 @@ class MainWindow(QMainWindow):
         except ChatHistoryError as error:
             self.conversation_list.clear()
             self.conversation_list.setVisible(False)
+            self.conversation_count.setText("—")
+            self.conversation_empty.setText("本地对话暂时无法读取\n请检查记录文件后重试")
+            self.conversation_empty.show()
+            self.recent_empty_filler.show()
             self.assistant_page.show_error(str(error), self._chat_conversation_id or "")
             return
         self.conversation_list.clear()
@@ -190,15 +275,44 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, conversation.conversation_id)
             item.setToolTip(f"{len(conversation.messages)} 条消息")
-            item.setSizeHint(QSize(0, 44))
+            item.setSizeHint(QSize(0, ROW_HEIGHT))
             self.conversation_list.addItem(item)
-            row = ConversationRow(conversation.conversation_id, conversation.title, self.conversation_list)
+            row = ConversationRow(conversation.conversation_id, conversation.title, self.conversation_list,
+                                  conversation.updated_at, len(conversation.messages))
             row.activated.connect(self._select_conversation_id)
             row.delete_requested.connect(self._delete_chat_by_id)
             self.conversation_list.setItemWidget(item, row)
             if conversation.conversation_id == self._chat_conversation_id:
                 self.conversation_list.setCurrentItem(item)
         self._update_conversation_selection()
+        self._filter_conversations()
+
+    def _filter_conversations(self, *_args: object) -> None:
+        query = self.conversation_search.text().strip().casefold()
+        total = self.conversation_list.count()
+        matched = 0
+        for index in range(total):
+            item = self.conversation_list.item(index)
+            row = self.conversation_list.itemWidget(item)
+            visible = isinstance(row, ConversationRow) and query in row.full_title.casefold()
+            item.setHidden(not visible)
+            matched += int(visible)
+        self.conversation_count.setText(f"{matched}/{total}" if query else str(total))
+        self.conversation_count.setToolTip(f"本机共 {total} 段对话；保留最近 {MAX_CONVERSATIONS} 段，不按天清除。")
+        self.conversation_list.setVisible(matched > 0)
+        self.conversation_empty.setVisible(matched == 0)
+        self.recent_empty_filler.setVisible(matched == 0)
+        self.conversation_empty.setText("没有匹配的对话\n试试其他标题关键词" if query else
+                                        "还没有最近对话\n新建一段对话开始使用 Orbit")
+
+    def _toggle_conversation_search(self) -> None:
+        visible = self.conversation_search.isHidden()
+        self.conversation_search.setVisible(visible)
+        self.conversation_search_button.setChecked(visible)
+        if visible:
+            self.conversation_search.setFocus()
+        else:
+            self.conversation_search.clear()
 
     def _update_conversation_selection(self, _row: int = -1) -> None:
         for index in range(self.conversation_list.count()):
@@ -278,6 +392,8 @@ class MainWindow(QMainWindow):
             return
         selected_paths = tuple(path for path in attachments if isinstance(path, Path)) \
             if isinstance(attachments, (tuple, list)) else ()
+        if self._send_parallel_if_enabled(text, selected_paths):
+            return
         try:
             settings = self.settings_store.load()
         except (SettingsError, OSError, ValueError) as error:
@@ -314,6 +430,91 @@ class MainWindow(QMainWindow):
             conversation = self.chat_history.create_conversation()
             self._chat_conversation_id = conversation.conversation_id
         return conversation
+
+    def _send_parallel_if_enabled(self, text: str, paths: tuple[Path, ...]) -> bool:
+        """Handle an explicitly enabled batch, never silently fall back to one model."""
+        enabled = getattr(self.settings_store, "is_parallel_mode_enabled", None)
+        if not callable(enabled):
+            return False
+        try:
+            if not enabled():
+                return False
+            if paths:
+                raise ValueError("并行模式不发送附件；请先关闭并行，再单独确认附件发送。")
+            configs = [config for config in self.settings_store.load_models() if config.enabled]
+            if not 1 <= len(configs) <= 4:
+                raise ValueError("请在设置中启用 1–4 个模型，或关闭并行模式。")
+            if not self._confirm_multi_model_privacy(configs):
+                return True
+            conversation = self._ensure_chat_conversation()
+            conversation = self.chat_history.add_message(conversation.conversation_id, "user", text)
+            self.assistant_page.accept_submission()
+            self.assistant_page.show_conversation(conversation)
+            self._refresh_conversation_list()
+            self._start_parallel_request(conversation.conversation_id, configs)
+        except (SettingsError, ChatHistoryError, OSError, ValueError) as error:
+            self.assistant_page.show_error(str(error), self.assistant_page.current_conversation_id() or "")
+        return True
+
+    def _confirm_multi_model_privacy(self, configs: list[ModelConfig]) -> bool:
+        """Disclose each actual endpoint, failing closed when its profile cannot load."""
+        scope = "\n".join(f"• {config.label} · {config.base_url}" for config in configs)
+        for config in configs:
+            if config.api_key:
+                scope = scope.replace(config.api_key, "[已隐藏密钥]")
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("确认多模型发送")
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setText(f"消息、近期最多 20 条上下文与 Orbit 系统提示词将分别发送给：\n\n{scope}\n\n"
+                       "不发送附件。云端模型可能分别计费；本机服务是否转发云端取决于其自身配置。继续吗？")
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        return dialog.exec() == QMessageBox.StandardButton.Yes
+
+    def _retry_parallel_if_enabled(self, conversation_id: str) -> bool:
+        enabled = getattr(self.settings_store, "is_parallel_mode_enabled", None)
+        if not callable(enabled):
+            return False
+        try:
+            if not enabled():
+                return False
+            configs = [config for config in self.settings_store.load_models() if config.enabled]
+            if not 1 <= len(configs) <= 4:
+                raise ValueError("请在设置中启用 1–4 个模型。")
+            if self._confirm_multi_model_privacy(configs):
+                self._start_parallel_request(conversation_id, configs)
+        except (SettingsError, ChatHistoryError, OSError, ValueError) as error:
+            self.assistant_page.show_error(str(error), conversation_id)
+        return True
+
+    def _start_parallel_request(self, conversation_id: str, configs: list[ModelConfig]) -> None:
+        """Use the same cancellation and conversation guards as a normal Orbit turn."""
+        conversation = self.chat_history.get_conversation(conversation_id)
+        if conversation is None or not conversation.messages:
+            return
+        messages = [{"role": message.role, "content": message.content}
+                    for message in conversation.messages[-20:]]
+        if sum(len(str(message["content"])) for message in messages) > 60_000:
+            raise ValueError("本次对话上下文过长，请新建对话后重试。")
+
+        def request(_progress, cancel_event):
+            result = run_models(configs, messages, {"system": ORBIT_SYSTEM_PROMPT}, cancel_event)
+            if not result.succeeded:
+                raise AIServiceError("；".join(item.error or "无回答" for item in result.failed))
+            return _format_multi_model_answer(result)
+
+        worker = TaskWorker(request)
+        self._chat_worker = worker
+        self._chat_conversation_id = conversation_id
+        worker.signals.completed.connect(lambda answer, job=worker, cid=conversation_id:
+                                         self._chat_request_completed(job, cid, str(answer)))
+        worker.signals.failed.connect(lambda error, job=worker, cid=conversation_id:
+                                      self._chat_request_failed(job, cid, error))
+        worker.signals.cancelled.connect(lambda _message, job=worker, cid=conversation_id:
+                                         self._chat_request_cancelled(job, cid))
+        self.assistant_page.set_busy(True, conversation_id)
+        self.thread_pool.start(worker)
 
     def _confirm_chat_privacy(self, settings: AISettings) -> bool:
         """Ask once before Orbit sends user turns and recent context to a provider."""
@@ -382,6 +583,87 @@ class MainWindow(QMainWindow):
         self.assistant_page.set_busy(True, conversation_id)
         self.thread_pool.start(worker)
 
+    def _test_multiple_models(self, configs: object) -> None:
+        """Probe every enabled model in parallel from the settings page."""
+        selected = [config for config in configs
+                    if isinstance(config, ModelConfig) and config.enabled] \
+            if isinstance(configs, (list, tuple)) else []
+        if not selected:
+            self.settings_page.set_parallel_test_failed("没有可测试的模型。")
+            return
+        try:
+            selected = [self.settings_store.resolve_model(item) for item in selected]
+        except (SettingsError, OSError, ValueError) as error:
+            self.settings_page.set_parallel_test_failed(str(error))
+            return
+        if len(selected) > 4:
+            self.settings_page.set_parallel_test_failed("一次最多测试 4 个模型。")
+            return
+        if self._active_worker is not None:
+            self.settings_page.set_parallel_test_failed("另一个后台任务正在运行，请稍后重试。")
+            return
+        messages = [{"role": "user", "content": "请用一句话确认模型可用。"}]
+
+        def probe(_progress, cancel_event):
+            return run_models(selected, messages, cancel_event=cancel_event)
+
+        self._run_task(probe, "正在并行测试已选模型…", self._parallel_test_completed,
+                       self._parallel_test_failed, kind="models")
+
+    def _parallel_test_completed(self, result: object) -> None:
+        if isinstance(result, MultiModelResult):
+            self.settings_page.set_parallel_test_result(result)
+        else:
+            self.settings_page.set_parallel_test_failed("返回结果无效。")
+
+    def _parallel_test_failed(self, message: str) -> None:
+        self.settings_page.set_parallel_test_failed(message)
+
+    def _refresh_local_models(self, base_url: str) -> None:
+        """Fetch the installed Ollama models off the UI thread."""
+        if self._active_worker is not None:
+            self.settings_page.set_local_models_failed("另一个后台任务正在运行，请稍后重试。")
+            return
+        config = ModelConfig("ollama", "qwen2.5:7b", base_url=str(base_url))
+
+        def probe(_progress, _cancel_event):
+            return build_provider(config).list_models()
+
+        self._run_task(probe, "正在获取本机 Ollama 模型…", self._local_models_completed,
+                       self._local_models_failed, kind="models")
+
+    def _local_models_completed(self, result: object) -> None:
+        self.settings_page.set_local_models(result)
+
+    def _local_models_failed(self, message: str) -> None:
+        self.settings_page.set_local_models_failed(message)
+
+    def _detect_ollama_models(self) -> None:
+        """List installed Ollama models off the UI thread for the model config combo."""
+        if self._active_worker is not None:
+            self.settings_page.set_ollama_models([], "另一个后台任务正在运行，请稍后重试。")
+            return
+        base_url = self.settings_page.base_url_edit.text().strip() or PROVIDER_BY_ID["ollama"].base_url
+        config = ModelConfig("ollama", PROVIDER_BY_ID["ollama"].model, base_url=base_url)
+        self.settings_page.set_ollama_detect_running(True)
+
+        def probe(_progress, _cancel_event):
+            return build_provider(config).list_models()
+
+        self._run_task(probe, "正在检测本机 Ollama 模型…", self._ollama_models_completed,
+                       self._ollama_models_failed, kind="models")
+
+    def _ollama_models_completed(self, result: object) -> None:
+        models = [str(name) for name in result if str(name).strip()] if isinstance(result, (list, tuple)) else []
+        self.settings_page.set_ollama_models(models, None)
+        try:
+            self.settings_store.save_model_options("ollama", models)
+        except (SettingsError, OSError, ValueError) as error:
+            self.settings_page.status_label.setText(f"已检测模型，但未能保存列表：{error}")
+
+    def _ollama_models_failed(self, message: str) -> None:
+        self.settings_page.set_ollama_models([], message)
+
     def _retry_chat_message(self) -> None:
         """Retry the saved final user turn using the current provider profile."""
         if self._chat_worker is not None or not self._chat_conversation_id:
@@ -401,6 +683,8 @@ class MainWindow(QMainWindow):
             self.assistant_page.show_error(f"模型配置读取失败：{error}", conversation_id)
             return
         selected_paths = attachments or ()
+        if not selected_paths and self._retry_parallel_if_enabled(conversation_id):
+            return
         if selected_paths and not self._confirm_attachment_upload(settings, selected_paths):
             return
         self._start_chat_request(conversation_id, settings, selected_paths)
@@ -426,6 +710,7 @@ class MainWindow(QMainWindow):
         if self.assistant_page.current_conversation_id() == conversation_id:
             self.assistant_page.set_conversation(conversation)
         self.assistant_page.set_busy(False)
+        self.assistant_page.show_reply(conversation_id)
 
     def _chat_request_failed(self, worker: TaskWorker, conversation_id: str, message: str) -> None:
         """Keep the user turn available for retry and show a safe provider error."""
@@ -496,6 +781,9 @@ class MainWindow(QMainWindow):
         self.page_title = QLabel()
         self.page_title.setObjectName("PageTitle")
         row.addWidget(self.page_title, 1)
+        row.addStretch(1)
+        settings_shortcut = QShortcut(QKeySequence("Ctrl+,"), self)
+        settings_shortcut.activated.connect(lambda: self._show_page("appsettings"))
         self.page_subtitle = QLabel()
         self.page_subtitle.setObjectName("PageSubtitle")
         self.page_subtitle.setWordWrap(True)
@@ -505,8 +793,13 @@ class MainWindow(QMainWindow):
         self.page_stack = QStackedWidget()
         self.organize_page = OrganizePage()
         self.assistant_page = AssistantPage()
+        self.assistant_page.set_user_avatar(self.account_button.icon())
+        self.assistant_page.set_user_name(self._user_name)
+        self.assistant_page.set_reduced_motion(self._reduced_motion)
+        self.assistant_page.motion_preference_changed.connect(self._save_motion_preference)
         self.history_page = HistoryPage()
         self.settings_page = SettingsPage(self.settings_store)
+        self.local_settings_page = LocalSettingsPage(self.settings_store)
         self.conversion_page = ConversionPage()
         self.pages: dict[str, QWidget] = {
             "organize": self.organize_page,
@@ -514,8 +807,9 @@ class MainWindow(QMainWindow):
             "history": self.history_page,
             "settings": self.settings_page,
             "conversion": self.conversion_page,
+            "appsettings": self.local_settings_page,
         }
-        for page in (self.organize_page, self.assistant_page, self.conversion_page, self.history_page, self.settings_page):
+        for page in self.pages.values():
             self.page_stack.addWidget(page)
 
     def _build_sidebar(self) -> QFrame:
@@ -524,43 +818,57 @@ class MainWindow(QMainWindow):
         sidebar.setMinimumWidth(230)
         sidebar.setMaximumWidth(380)
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(20, 26, 18, 20)
+        layout.setContentsMargins(16, 20, 14, 16)
         layout.setSpacing(0)
         layout.addWidget(self._build_brand())
-        layout.addSpacing(22)
-        layout.addWidget(self._build_navigation(), 3)
-        layout.addSpacing(12)
-        layout.addWidget(self._build_recent_area(), 2)
+        layout.addSpacing(14)
+        layout.addWidget(self._build_navigation())
+        layout.addSpacing(8)
+        layout.addWidget(self._build_recent_area(), 1)
+        self.sidebar_filler = QWidget()
+        self.sidebar_filler.hide()
+        layout.addWidget(self.sidebar_filler, 1)
         mode_label = QLabel("仅处理你选择的目录")
         mode_label.setObjectName("SidebarFooter")
         layout.addSpacing(10)
         layout.addWidget(mode_label)
-        layout.addSpacing(12)
+        layout.addSpacing(8)
         layout.addWidget(self._build_local_account())
         return sidebar
 
     def _build_local_account(self) -> QPushButton:
-        self.account_button = QPushButton("本机用户")
-        self.account_button.setObjectName("LocalAccountButton")
+        self.account_button = LocalAccountButton(self._user_name)
         try:
             self.account_button.setIcon(avatar_icon(self.workspace_store.avatar_path()))
         except WorkspaceError:
             self.account_button.setIcon(avatar_icon(None))
         self.account_button.setIconSize(QSize(30, 30))
-        self.account_button.setAccessibleName("本机账户与锁屏")
-        self.account_button.setToolTip("应用级本地锁屏 · 当前设备")
         menu = QMenu(self.account_button)
+        menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint |
+                            Qt.WindowType.NoDropShadowWindowHint)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         menu.addAction("更换本机头像…", self._choose_avatar)
+        self.rename_user_action = menu.addAction("修改用户名…", self._rename_user)
         menu.addSeparator()
         for title, mode in (("锁定 / 登出  Ctrl+L", "unlock"), ("修改本机密码", "change")):
             action = menu.addAction(title)
-            action.triggered.connect(lambda checked=False, selected=mode: self._request_local_auth(selected))
-        self.account_button.setMenu(menu)
-        for action in menu.actions()[2:]:
             action.setEnabled(self.lock_store is not None)
+            action.triggered.connect(lambda checked=False, selected=mode: self._request_local_auth(selected))
+        menu.addSeparator()
+        self.local_settings_action = menu.addAction("设置", lambda: self._show_page("appsettings"))
+        self.local_settings_action.setIcon(svg_icon("settings", COLORS["muted"]))
+        self.account_button.setMenu(menu)
         shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
         shortcut.activated.connect(lambda: self._request_local_auth("unlock"))
         return self.account_button
+
+    def _rename_user(self) -> None:
+        dialog = UserNameDialog(self._user_name, self.workspace_store, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._user_name = dialog.user_name
+            self.account_button.set_user_name(dialog.user_name)
+            self.assistant_page.set_user_name(dialog.user_name)
+        dialog.deleteLater()
 
     def _restore_sidebar(self) -> None:
         self.sidebar.setVisible(not self._sidebar_collapsed)
@@ -592,6 +900,19 @@ class MainWindow(QMainWindow):
         self._organizer_height = height
         self._layout_timer.start()
 
+    def _save_motion_preference(self, reduced: bool) -> None:
+        try:
+            self.workspace_store.save_reduced_motion(reduced)
+        except (WorkspaceError, OSError) as error:
+            self.assistant_page.set_reduced_motion(self._reduced_motion)
+            QMessageBox.warning(self, "无法保存动态效果设置", str(error))
+            return
+        self._reduced_motion = reduced
+
+    def _restore_organizer_height(self) -> None:
+        splitter = self.organize_page.layout_splitter
+        splitter.setSizes([self._organizer_height, max(180, splitter.height() - self._organizer_height - 8)])
+
     def _choose_avatar(self) -> None:
         if self._avatar_worker is not None:
             return
@@ -609,7 +930,9 @@ class MainWindow(QMainWindow):
 
     def _avatar_saved(self, path: object) -> None:
         self._avatar_worker = None
-        self.account_button.setIcon(avatar_icon(path if isinstance(path, Path) else None))
+        icon = avatar_icon(path if isinstance(path, Path) else None)
+        self.account_button.setIcon(icon)
+        self.assistant_page.set_user_avatar(icon)
         self.organize_page.set_status("头像已保存在本机，未上传到任何模型服务。")
         if self._close_pending:
             self.close()
@@ -639,11 +962,12 @@ class MainWindow(QMainWindow):
         brand = QHBoxLayout(brand_widget)
         brand.setContentsMargins(0, 0, 0, 0)
         brand.setSpacing(10)
-        mark = QLabel("FM")
-        mark.setObjectName("FileMindBrandMark")
+        mark = QLabel()
+        mark.setPixmap(application_icon().pixmap(QSize(42, 42), self.devicePixelRatioF()))
+        mark.setAccessibleName("FileMind 应用图标")
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark.setFixedSize(42, 42)
-        mark.setStyleSheet("background:#7C5CE7;color:white;border-radius:13px;font-size:13pt;font-weight:700;")
+        mark.setObjectName("BrandMark")
         brand.addWidget(mark)
         brand_text = QVBoxLayout()
         name = QLabel("FileMind")
@@ -664,12 +988,12 @@ class MainWindow(QMainWindow):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setMinimumHeight(0)
-        scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        scroll.setMinimumHeight(80)
+        scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         navigation = QWidget()
         navigation_layout = QVBoxLayout(navigation)
         navigation_layout.setContentsMargins(0, 0, 3, 0)
-        navigation_layout.setSpacing(7)
+        navigation_layout.setSpacing(4)
         self.nav_buttons: dict[str, QPushButton] = {}
         for key, title, icon_name, _page_title, _page_subtitle in NAVIGATION_ITEMS:
             button = QPushButton(title)
@@ -682,32 +1006,34 @@ class MainWindow(QMainWindow):
             navigation_layout.addWidget(button)
         navigation_layout.addStretch(1)
         scroll.setWidget(navigation)
+        scroll.setMaximumHeight(min(260, navigation.sizeHint().height()))
         return scroll
 
     def _build_recent_area(self) -> QWidget:
         self.recent_area = QFrame()
-        self.recent_area.setMinimumHeight(150)
+        self.recent_area.setMinimumHeight(280)
         self.recent_area.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         recent_layout = QVBoxLayout(self.recent_area)
         recent_layout.setContentsMargins(0, 8, 0, 0)
         recent_layout.setSpacing(7)
-        recent_header = QHBoxLayout()
-        recent_title = QLabel("最近对话")
-        recent_title.setObjectName("Muted")
-        self.new_chat_button = QPushButton("＋")
-        self.new_chat_button.setObjectName("OrbitLinkButton")
-        self.new_chat_button.setToolTip("新建 Orbit 对话")
-        self.new_chat_button.setFixedWidth(34)
-        recent_header.addWidget(recent_title, 1)
-        recent_header.addWidget(self.new_chat_button)
-        recent_layout.addLayout(recent_header)
-        self.conversation_list = QListWidget()
+        recent_layout.addLayout(self._build_recent_header())
+        self.conversation_search = QLineEdit()
+        self.conversation_search.setObjectName("OrbitConversationSearch")
+        self.conversation_search.setPlaceholderText("搜索对话标题…")
+        self.conversation_search.setAccessibleName("搜索最近对话")
+        self.conversation_search.setClearButtonEnabled(True)
+        self.conversation_search.textChanged.connect(self._filter_conversations)
+        self.conversation_search.hide()
+        recent_layout.addWidget(self.conversation_search)
+        self.conversation_list = ConversationList()
         self.conversation_list.setObjectName("OrbitRecentList")
         self.conversation_list.setFrameShape(QFrame.Shape.NoFrame)
-        self.conversation_list.setSpacing(4)
-        self.conversation_list.setMinimumHeight(82)
+        self.conversation_list.setSpacing(1)
+        self.conversation_list.setMinimumHeight(216)
+        self.conversation_list.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         self.conversation_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.conversation_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.conversation_list.itemActivated.connect(self._select_chat_item)
         recent_layout.addWidget(self.conversation_list, 1)
         self.conversation_empty = QLabel("还没有最近对话\n新建一段对话开始使用 Orbit")
         self.conversation_empty.setObjectName("OrbitRecentEmpty")
@@ -716,8 +1042,36 @@ class MainWindow(QMainWindow):
         self.conversation_empty.setMinimumHeight(68)
         self.conversation_empty.setMaximumHeight(76)
         recent_layout.addWidget(self.conversation_empty)
-        recent_layout.addStretch(1)
+        self.recent_empty_filler = QWidget()
+        recent_layout.addWidget(self.recent_empty_filler, 1)
         return self.recent_area
+
+    def _build_recent_header(self) -> QHBoxLayout:
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        title = QLabel("最近对话")
+        title.setObjectName("OrbitRecentHeading")
+        header.addWidget(title)
+        self.conversation_count = QLabel("0")
+        self.conversation_count.setObjectName("OrbitConversationCount")
+        header.addWidget(self.conversation_count)
+        header.addStretch(1)
+        self.conversation_search_button = QPushButton()
+        self.conversation_search_button.setObjectName("OrbitRecentSearchButton")
+        self.conversation_search_button.setCheckable(True)
+        self.conversation_search_button.setIcon(svg_icon("search", size=16))
+        self.conversation_search_button.setAccessibleName("搜索最近对话")
+        self.conversation_search_button.setToolTip("搜索最近对话标题")
+        self.conversation_search_button.clicked.connect(self._toggle_conversation_search)
+        self.new_chat_button = QPushButton()
+        self.new_chat_button.setObjectName("OrbitRecentNewButton")
+        self.new_chat_button.setIcon(svg_icon("plus", "#7751D8", 17))
+        self.new_chat_button.setToolTip("新建 Orbit 对话")
+        self.new_chat_button.setAccessibleName("新建 Orbit 对话")
+        for button in (self.conversation_search_button, self.new_chat_button):
+            button.setFixedSize(30, 30)
+            header.addWidget(button)
+        return header
 
     def _show_page(self, page_name: str) -> None:
         page = self.pages[page_name]
@@ -729,6 +1083,7 @@ class MainWindow(QMainWindow):
         self.page_title.setVisible(not is_assistant)
         self.page_subtitle.setVisible(not is_assistant and page_name != "organize")
         self.recent_area.setVisible(is_assistant)
+        self.sidebar_filler.setVisible(not is_assistant)
         if is_assistant:
             self.assistant_page.set_busy(self._chat_worker is not None, self._chat_conversation_id)
         for key, button in self.nav_buttons.items():
@@ -742,9 +1097,13 @@ class MainWindow(QMainWindow):
             return
         root = Path(folder).expanduser()
         ai_mode = self.organize_page.mode_combo.currentData() == "ai"
-        ai_settings = self._prepare_ai_settings() if ai_mode else None
+        content_analysis = ai_mode and self.organize_page.content_checkbox.isChecked()
+        ai_settings = self._prepare_ai_settings(confirm_metadata=not content_analysis) if ai_mode else None
         if ai_mode and ai_settings is None:
             self.organize_page.set_status("AI 请求未发送：请完成服务配置或同意发送元数据。")
+            return
+        if content_analysis and not self._confirm_content_privacy(ai_settings):
+            self.organize_page.set_status("已取消内容识别：没有读取或发送文件正文。")
             return
         user_rule = self.organize_page.rule_input.toPlainText().strip()
         rename_enabled = self.organize_page.rename_checkbox.isChecked()
@@ -756,7 +1115,7 @@ class MainWindow(QMainWindow):
         preset = str(self.organize_page.preset_combo.currentData())
         task = lambda progress, cancel: self._scan_and_plan(
             root, ai_mode, ai_settings, user_rule, rename_enabled, progress, cancel, preset,
-            lambda message: self.organization_phase.emit(generation, message)
+            lambda message: self.organization_phase.emit(generation, message), content_analysis
         )
         self.organize_page.clear_plan()
         self._run_task(task, "正在扫描所选文件夹…",
@@ -766,7 +1125,7 @@ class MainWindow(QMainWindow):
     def _organization_signature(self) -> tuple[object, ...]:
         page = self.organize_page
         return (page.mode_combo.currentData(), page.preset_combo.currentData(),
-                page.rule_input.toPlainText(), page.rename_checkbox.isChecked())
+                page.rule_input.toPlainText(), page.rename_checkbox.isChecked(), page.content_checkbox.isChecked())
 
     def _organization_phase_changed(self, generation: int, message: str) -> None:
         if generation == self._folder_generation and self._active_worker is not None:
@@ -864,7 +1223,7 @@ class MainWindow(QMainWindow):
             self._preview_dialog = None
             dialog.close()
 
-    def _prepare_ai_settings(self) -> AISettings | None:
+    def _prepare_ai_settings(self, confirm_metadata: bool = True) -> AISettings | None:
         if self.settings_page.has_unsaved_changes:
             QMessageBox.information(self, "请先保存 AI 配置", "当前 AI 服务配置尚未保存，请先保存再生成整理预览。")
             self._show_page("settings")
@@ -878,7 +1237,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "AI 服务未配置", "请先在设置页配置服务商、Base URL、模型名称和 API Key。")
             self._show_page("settings")
             return None
-        return ai_settings if self._confirm_ai_privacy() else None
+        return ai_settings if not confirm_metadata or self._confirm_ai_privacy() else None
 
     def _confirm_ai_privacy(self) -> bool:
         try:
@@ -900,6 +1259,19 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "无法读取或保存隐私设置", str(error))
             return False
 
+    def _confirm_content_privacy(self, settings: AISettings) -> bool:
+        """Require new authorization for every content-reading organization job."""
+        answer = QMessageBox.question(
+            self, "确认本次内容识别与命名",
+            f"接收服务：{settings.provider_id} · {settings.model}\n\n"
+            "仅分析当前所选目录第一层文件：文档开头最多 1800 字（PDF 最多前三页）；图片压缩到最长 1024 像素，"
+            "图中可见个人信息仍可能被发送。另发送文件名、大小、修改时间和你的规则。\n"
+            "最多分析 128 个文件、单文件 8 MB、图片合计 12 MB；不读取子目录。疑似凭据文件会排除；不支持或失败的文件标记并跳过。\n"
+            "请先移除不想发送的文件。是否授权本次发送？建议仍须预览确认后才会执行。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     @staticmethod
     def _scan_and_plan(
         root: Path,
@@ -911,6 +1283,7 @@ class MainWindow(QMainWindow):
         cancel: Event,
         preset_key: str = "extension",
         on_phase: Callable[[str], None] | None = None,
+        content_analysis: bool = False,
     ) -> tuple[OperationPlan, list[OperationRecord], OperationHistory, dict[str, str]]:
         if on_phase:
             on_phase("正在扫描所选目录…")
@@ -918,11 +1291,19 @@ class MainWindow(QMainWindow):
         suggestions: dict[str, FileSuggestion] = {}
         failed_file_ids: dict[str, str] = {}
         if ai_mode and files and ai_settings:
+            metadata = [file_metadata(file_info) for file_info in files]
+            if content_analysis:
+                from filemind.ai.content import prepare_content_metadata
+                if on_phase:
+                    on_phase("正在提取已授权的内容片段与图片缩略图…")
+                metadata, content_failures = prepare_content_metadata(root, files, ai_settings, cancel)
+                for failure in content_failures:
+                    failed_file_ids.update({file_id: failure.message for file_id in failure.file_ids})
             if on_phase:
-                on_phase("正在向所选服务商请求 AI 建议…")
+                on_phase("正在向所选服务商请求 AI 建议…" if metadata else "没有可安全分析的内容，未发送 AI 请求。")
             client = OpenAICompatibleClient(ai_settings)
             result = client.organize_files(
-                [file_metadata(file_info) for file_info in files], user_rule, rename_enabled, progress, cancel
+                metadata, user_rule, rename_enabled, progress, cancel
             )
             suggestions = result.suggestions
             for failure in result.failures:
@@ -996,7 +1377,7 @@ class MainWindow(QMainWindow):
         if not executable:
             QMessageBox.information(
                 self, "没有可执行的文件",
-                "预览中的文件都会被跳过。请修改分类、文件名，或取消勾选“执行”列后重试。")
+                "预览中的文件都会被跳过。请解决冲突、修改分类或文件名，或重新勾选要执行的安全行。")
             return
         self.organize_page.set_plan(plan)
         detail = f"即将移动 {len(executable)} 个文件到预览中的分类文件夹。"
@@ -1141,7 +1522,12 @@ class MainWindow(QMainWindow):
         if self._active_worker is not worker:
             return
         cleared_scan = self._active_task_kind == "scan" and not self.organize_page.path_edit.text().strip()
+        model_task = self._active_task_kind == "models"
         self._finish_task(worker)
+        if model_task:
+            self.settings_page.set_parallel_test_failed("已取消")
+            self.settings_page.set_ollama_detect_running(False)
+            self.settings_page.set_local_models_failed("检测已取消")
         if self._close_pending:
             self.close()
             return
@@ -1168,7 +1554,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if (self._active_worker is not None or self._chat_worker is not None or
-                self._avatar_worker is not None or self.conversion_page.is_busy):
+                self._avatar_worker is not None or self.conversion_page.has_pending_work):
             self._close_pending = True
             self._cancel_task()
             self._cancel_chat_task()
@@ -1190,4 +1576,19 @@ def main() -> int:
 
 def _is_usable_ai_settings(settings: AISettings | None) -> bool:
     """Check the minimum UI prerequisites before enabling online AI mode."""
-    return bool(settings and settings.api_key.strip() and settings.base_url.strip() and settings.model.strip())
+    return bool(settings and settings.base_url.strip() and settings.model.strip()
+                and (settings.api_key.strip() or is_local_connection(settings.provider_id, settings.base_url)))
+
+
+def _format_multi_model_answer(result: MultiModelResult) -> str:
+    """Group model answers as Markdown without interpreting labels as markup."""
+    import re
+    parts: list[str] = []
+    budget = max(1, (MAX_MESSAGE_LENGTH - 1200) // max(1, len(result.results)))
+    for item in result.results:
+        label = re.sub(r"[\r\n#<>]", " ", item.label)[:160]
+        body = item.content if item.ok else f"调用失败：{item.error}"
+        if len(body) > budget:
+            body = body[:budget] + "\n\n[回答超出本地会话长度限制，后文已截断。]"
+        parts.append(f"### {label}\n\n耗时 {item.latency_ms} ms\n\n{body}")
+    return "\n\n---\n\n".join(parts)

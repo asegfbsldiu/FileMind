@@ -1,0 +1,15 @@
+/* Model management shares the active palette and rounded popups. */
+QFrame#ModelSelectionRow { background: __purple_soft__; border: 1px solid __purple_border__;
+    border-radius: 12px; }
+QFrame#ModelSelectionRow:hover { background: __row_hover_b__; }
+QFrame#ModelSelectionRow QLabel { color: __text__; background: transparent; font-size: 9pt; }
+QFrame#ModelSelectionRow QPushButton { min-height: 24px; padding: 4px 8px;
+    border-radius: 8px; background: __card__; }
+QComboBox#ModelConfigChoice QLineEdit { border: 0; border-radius: 0;
+    background: transparent; padding: 0; min-height: 0; }
+QLabel#SettingsSectionTitle { font-size: 12pt; font-weight: 650; }
+QLabel#UserNameError { color: __danger__; font-size: 9pt; }
+QComboBox#AppearanceChoice { min-width: 135px; }
+QLabel#ModelProviderLogo { background: transparent; border: 0; }
+QLabel#Muted[statusTone="success"] { color: __success__; }
+QLabel#Muted[statusTone="danger"] { color: __danger__; }

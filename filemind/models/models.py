@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 
-OperationStatus = Literal["pending", "success", "failed", "undone", "cancelled"]
+OperationStatus = Literal["pending", "success", "failed", "undone", "cancelled", "skipped"]
 
 
 @dataclass(frozen=True)

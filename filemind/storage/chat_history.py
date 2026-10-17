@@ -12,7 +12,7 @@ from filemind.chat_models import ChatConversation, ChatMessage
 from filemind.storage.paths import config_dir
 
 
-MAX_CONVERSATIONS = 50
+MAX_CONVERSATIONS = 200
 MAX_MESSAGE_LENGTH = 20_000
 
 

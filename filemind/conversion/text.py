@@ -17,6 +17,7 @@ from filemind.conversion.models import ConversionTarget
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".log", ".py", ".c", ".h", ".java", ".js", ".ts",
                  ".sql", ".csv", ".json", ".html", ".htm", ".xml", ".yaml", ".yml"}
 EXTRA_TARGETS = {
+    "text_epub": ConversionTarget("text_epub", "文本 → EPUB 电子书", ".epub", "创建含目录的 EPUB 3，按文本段落排版；不解析脚本或复刻原排版。"),
     "text_html": ConversionTarget("text_html", "文本 → 静态 HTML", ".html", "转义文本，保留换行；不执行脚本或加载远程资源。"),
     "html_text": ConversionTarget("html_text", "HTML → 纯文本", ".txt", "提取可见文本，忽略脚本/样式；不加载外部链接。"),
     "text_docx": ConversionTarget("text_docx", "文本 → DOCX", ".docx", "按文本行创建段落，不承诺 Markdown 或 HTML 排版复刻。"),
@@ -29,9 +30,9 @@ EXTRA_TARGETS = {
 
 def extra_text_targets(suffix: str) -> tuple[ConversionTarget, ...]:
     """Expose transformations matching this text format, keeping original IDs."""
-    keys = ["text_html", "text_docx"]
+    keys = ["text_html", "text_docx", "text_epub"]
     if suffix in {".html", ".htm"}:
-        keys = ["html_text", "text_docx"]
+        keys = ["html_text", "text_docx", "text_epub"]
     keys += {".json": ["json_yaml"], ".yaml": ["yaml_json"], ".yml": ["yaml_json"],
              ".xml": ["xml_pretty"], ".csv": ["csv_xlsx"]}.get(suffix, [])
     return tuple(EXTRA_TARGETS[key] for key in keys)
@@ -70,6 +71,10 @@ def html_text(text: str) -> str:
 def write_transformed(text: str, key: str, staging: Path, cancel: Event) -> None:
     """Write one real transformation to a caller-owned staging file."""
     check_cancel(cancel)
+    if key == "text_epub":
+        from filemind.conversion.epub import write_epub
+        write_epub(html_text(text) if text.lstrip().lower().startswith(("<!doctype html", "<html")) else text, staging, cancel)
+        return
     if key == "text_docx":
         from docx import Document
         document = Document()
@@ -91,20 +96,31 @@ def write_transformed(text: str, key: str, staging: Path, cancel: Event) -> None
     elif key == "yaml_json":
         result = _yaml_json(text)
     elif key == "xml_pretty":
-        root = ElementTree.fromstring(text, forbid_dtd=True, forbid_entities=True, forbid_external=True)
-        from xml.etree.ElementTree import indent, tostring
-        indent(root)
-        result = tostring(root, encoding="unicode")
+        result = _format_xml(text)
     else:
         raise ConversionError("不支持这个文本转换目标。")
     staging.write_text(result, encoding="utf-8")
 
 
+def _format_xml(text: str) -> str:
+    from defusedxml.common import DefusedXmlException
+    from xml.etree.ElementTree import ParseError, indent, tostring
+    try:
+        root = ElementTree.fromstring(text, forbid_dtd=True, forbid_entities=True, forbid_external=True)
+        indent(root)
+        return tostring(root, encoding="unicode")
+    except (DefusedXmlException, ParseError) as error:
+        raise ConversionError("XML 格式无效或包含被禁用的 DTD / 实体，未读取外部资源。") from error
+
+
 def _yaml_json(text: str) -> str:
     import yaml
-    if any(isinstance(event, yaml.AliasEvent) for event in yaml.parse(text)):
-        raise ConversionError("暂不转换含 YAML 别名的数据，避免循环或过度展开。")
-    value = yaml.safe_load(text)
+    try:
+        if any(isinstance(event, yaml.AliasEvent) for event in yaml.parse(text)):
+            raise ConversionError("暂不转换含 YAML 别名的数据，避免循环或过度展开。")
+        value = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise ConversionError("YAML 格式无效或包含不支持的标签，未执行任何内容。") from error
     try:
         return json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
     except (ValueError, TypeError) as error:
@@ -130,6 +146,15 @@ def _csv_workbook(text: str, output: Path, cancel: Event) -> None:
 
 def convert_epub(source: Path, staging: Path, progress: Progress, cancel: Event) -> None:
     """Read only bounded spine entries from the selected EPUB archive."""
+    from xml.etree.ElementTree import ParseError
+    from defusedxml.common import DefusedXmlException
+    try:
+        _write_epub(source, staging, progress, cancel)
+    except (KeyError, AttributeError, ParseError, DefusedXmlException, UnicodeError) as error:
+        raise ConversionError("EPUB 章节索引或文本无效，可能是加密、损坏或非 UTF-8 内容。") from error
+
+
+def _write_epub(source: Path, staging: Path, progress: Progress, cancel: Event) -> None:
     check_archive(source)
     with ZipFile(source) as archive:
         container = ElementTree.fromstring(archive.read("META-INF/container.xml"))

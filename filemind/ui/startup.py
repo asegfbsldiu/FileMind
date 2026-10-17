@@ -6,6 +6,8 @@ from PySide6.QtCore import QObject, Qt, QThreadPool
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from filemind.storage.local_lock import LocalLockError, LocalLockStore
+from filemind.storage.settings import SettingsError, SettingsStore
+from filemind.ui.branding import configure_application_identity
 from filemind.ui.dialogs.local_lock import LocalLockDialog
 from filemind.ui.main_window import MainWindow
 from filemind.ui.styles.theme import apply_theme
@@ -68,13 +70,18 @@ def run_application() -> int:
     """Run the single official Qt Widgets application behind a local lock."""
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     application = QApplication(sys.argv)
-    application.setApplicationName("FileMind")
+    configure_application_identity(application)
     application.setQuitOnLastWindowClosed(False)
-    apply_theme(application)
+    settings_store = SettingsStore()
+    try:
+        appearance = settings_store.get_appearance()
+    except (SettingsError, OSError, ValueError):
+        appearance = "light"
+    apply_theme(application, appearance)
     store = LocalLockStore()
     if not authenticate(store):
         return 0
-    window = MainWindow(lock_store=store)
+    window = MainWindow(settings_store=settings_store, lock_store=store)
     window.lock_controller = LocalLockController(window, store)
     window.show()
     application.setQuitOnLastWindowClosed(True)

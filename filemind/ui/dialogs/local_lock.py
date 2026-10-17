@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from filemind.storage.local_lock import LocalLockStore
+from filemind.ui.branding import application_icon
 from filemind.ui.styles.theme import COLORS
 from filemind.ui.workers import TaskWorker
 
@@ -51,6 +52,7 @@ class LocalLockDialog(QDialog):
         self._close_pending = False
         self.setObjectName("LocalLockDialog")
         self.setWindowTitle("FileMind · 本机工作空间")
+        self.setWindowIcon(application_icon())
         self.setMinimumSize(760, 600)
         self.resize(920, 660)
         self._build_ui()

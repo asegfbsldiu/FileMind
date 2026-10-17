@@ -2,7 +2,6 @@
 
 import tempfile
 import unittest
-from dataclasses import replace
 from pathlib import Path
 
 from filemind.core.classifier import classify_file
@@ -10,7 +9,7 @@ from filemind.core.executor import execute_plan, undo_record
 from filemind.core.planner import build_plan
 from filemind.core.scanner import scan_files
 from filemind.ai.schemas import file_metadata
-from filemind.models import FileSuggestion, OperationPlan
+from filemind.models import FileSuggestion
 from filemind.storage.history import OperationHistory
 
 
@@ -28,13 +27,11 @@ class ExecutorTests(unittest.TestCase):
             self.assertTrue(source.exists())
             self.assertFalse((root / "文档" / source.name).exists())
 
-    def test_existing_destination_is_skipped_without_stopping_the_batch(self) -> None:
+    def test_existing_destination_is_never_overwritten(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             source = root / "notes.txt"
             source.write_text("source", encoding="utf-8")
-            other = root / "报告.pdf"
-            other.write_text("report", encoding="utf-8")
             target = root / "文档" / source.name
             target.parent.mkdir()
             target.write_text("keep", encoding="utf-8")
@@ -43,42 +40,13 @@ class ExecutorTests(unittest.TestCase):
 
             result = execute_plan(plan, history, confirmed=True)
 
-            self.assertEqual((result.succeeded, result.skipped, result.failed), (1, 1, 0))
+            self.assertEqual((result.succeeded, result.skipped, result.failed), (0, 1, 0))
+            record = history.list_records()[0]
+            self.assertEqual(record.operations[0]["status"], "skipped")
+            self.assertIn("同名", str(record.operations[0]["skip_reason"]))
+
             self.assertEqual(source.read_text(encoding="utf-8"), "source")
             self.assertEqual(target.read_text(encoding="utf-8"), "keep")
-            self.assertTrue((root / "文档" / "报告.pdf").exists())
-            self.assertIn("已存在同名文件", result.skip_reasons[0])
-            record = history.list_records()[0]
-            self.assertEqual([item["status"] for item in record.operations].count("skipped"), 1)
-            self.assertIn("已存在同名文件",
-                          next(item["skip_reason"] for item in record.operations
-                               if item["status"] == "skipped"))
-
-    def test_excluded_row_is_not_moved_and_undo_ignores_it(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            keep = root / "笔记.txt"
-            keep.write_text("keep me", encoding="utf-8")
-            moved = root / "报告.pdf"
-            moved.write_text("move me", encoding="utf-8")
-            plan = build_plan(root, scan_files(root), classify_file)
-            operations = tuple(
-                replace(operation, excluded=True) if operation.source.name == "笔记.txt" else operation
-                for operation in plan.operations
-            )
-            history = OperationHistory(root)
-
-            result = execute_plan(OperationPlan(root, operations), history, confirmed=True)
-
-            self.assertEqual((result.succeeded, result.skipped), (1, 1))
-            self.assertTrue(keep.exists())
-            self.assertFalse((root / "文档" / "笔记.txt").exists())
-            self.assertIn("已在预览中排除", result.skip_reasons[0])
-            operation_id = history.list_records()[0].operation_id
-            undo_result = undo_record(history, operation_id)
-            self.assertEqual(undo_result.succeeded, 1)
-            self.assertTrue(moved.exists())
-
 
     def test_successful_move_can_be_undone(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -15,6 +15,9 @@ class AIFileMetadata:
     extension: str
     size_bytes: int
     modified_ns: int
+    content_excerpt: str = ""
+    image_data_url: str = ""
+    content_note: str = ""
 
 
 @dataclass(frozen=True)

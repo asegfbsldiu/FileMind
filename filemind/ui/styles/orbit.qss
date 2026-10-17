@@ -1,0 +1,77 @@
+QWidget#OrbitRoot { background: __sidebar__; }
+QScrollArea#OrbitHomeScroll, QScrollArea#OrbitHomeScroll > QWidget > QWidget,
+QScrollArea#OrbitMessageScroll, QScrollArea#OrbitMessageScroll > QWidget > QWidget,
+QWidget#OrbitMessagesContainer { background: transparent; border: 0; }
+QLabel#OrbitHeroTitle { color: __text__; font-size: 26pt; font-weight: 700; }
+QLabel#OrbitHeroSubtitle { color: __muted__; font-size: 13pt; padding-bottom: 5px; }
+QLabel#OrbitFootnote, QLabel#OrbitStatus { color: __muted__; font-size: 9pt; }
+QLabel#OrbitSetupNotice { color: __setup_text__; background: __info_soft__;
+    border: 1px solid __info_border__; border-radius: 10px; padding: 8px 12px; }
+QLabel#OrbitChatTitle { color: __text__; font-size: 16pt; font-weight: 650; padding: 8px 4px; }
+QFrame#OrbitComposerCard { background: __card__; border: 1px solid __attach_btn_border__; border-radius: 18px; }
+QPlainTextEdit#OrbitEditor { border: 0; background: transparent; padding: 7px 6px;
+    font-size: 11pt; color: __text__; }
+QComboBox#OrbitModelSelector { min-height: 40px; max-height: 40px;
+    border: 0; background: transparent; padding: 0; outline: 0; }
+QComboBox#OrbitModelSelector::drop-down { width: 27px; border: 0; background: transparent; }
+QComboBox#OrbitModelSelector::down-arrow { image: none; }
+QPushButton#OrbitSendButton { background: __primary__; color: white; border: 0;
+    border-radius: 12px; padding: 9px 18px; font-weight: 600; }
+QPushButton#OrbitSendButton:hover { background: __primary_hover__; }
+QPushButton#OrbitSendButton:pressed { background: __link__; }
+QPushButton#OrbitSendButton:disabled { background: __progress_bg__; color: __placeholder__; }
+QPushButton#OrbitStopButton, QPushButton#OrbitRetryButton { background: __primary_soft__;
+    color: __link__; border: 1px solid __tint_blue_b__; border-radius: 10px; padding: 8px 14px; }
+QPushButton#OrbitLinkButton { color: __link__; border: 0; background: transparent; }
+QFrame#OrbitAssistantBubble { background: __card__; border: 1px solid __divider__; border-radius: 14px; }
+QFrame#OrbitUserBubble { background: __tint_blue__; border: 1px solid __tint_blue_b__; border-radius: 14px; }
+QLabel#OrbitAssistantAvatar { background: transparent; border: 0; }
+QLabel#OrbitUserAvatar { background: __primary_soft__; border: 0; border-radius: 18px; }
+QLabel#OrbitMessageCaption { color: __setup_text__; background: transparent; font-size: 9pt; font-weight: 600; }
+QLabel#OrbitMessageAttachments { color: __msg_att_text__; background: __chat_bubble_u__;
+    border-radius: 8px; padding: 5px 8px; font-size: 9pt; }
+QTextBrowser#OrbitMessageContent { border: 0; background: transparent; color: __text__;
+    padding: 0; font-size: 10pt; selection-background-color: __msg_selection__; }
+QPushButton#OrbitSuggestionCard { text-align: left; background: __card__;
+    border: 1px solid __chat_bubble_a_b__; border-radius: 15px; min-height: 112px; }
+QPushButton#OrbitSuggestionCard:hover { background: __sug_hover__; border-color: __sug_hover_b__; }
+QPushButton#OrbitSuggestionCard:pressed { background: __info_soft__; }
+QLabel#OrbitSuggestionIcon { color: __purple__; background: __purple_soft__;
+    border-radius: 11px; padding: 0; }
+QLabel#OrbitSuggestionTitle { color: __text__; font-size: 11pt; font-weight: 650; }
+QLabel#OrbitSuggestionDescription { color: __muted__; font-size: 9pt; }
+QLabel#OrbitAttachmentSummary { color: __setup_text__; background: __page_bg__;
+    border: 1px solid __chat_bubble_a_b__; border-radius: 9px; padding: 6px 10px; }
+QPushButton#OrbitAttachmentClear { color: __muted__; background: transparent;
+    border: 0; padding: 5px 8px; }
+QPushButton#OrbitAttachButton { color: __attach_btn__; background: __page_bg__;
+    border: 1px solid __chat_bubble_a_b__; border-radius: 11px; padding: 8px 12px; }
+QPushButton#OrbitAttachButton:hover { background: __sug_icon_bg__; border-color: __attach_btn_hover_b__; }
+
+/* Compact navigation leaves a stable, scrollable area for recent sessions. */
+QPushButton#NavButton { padding: 7px 10px; min-height: 22px; border-radius: 10px; }
+QLabel#OrbitRecentHeading { color: __attach_btn__; font-size: 9pt; font-weight: 600; }
+QLabel#OrbitConversationCount { color: __hint__; background: __steps_soft__;
+    border-radius: 7px; padding: 2px 6px; font-size: 8pt; }
+QPushButton#OrbitRecentNewButton, QPushButton#OrbitRecentSearchButton {
+    padding: 0; border: 1px solid transparent; border-radius: 9px; background: transparent; }
+QPushButton#OrbitRecentNewButton { background: __orb_grad_a__; border-color: __purple_border__; }
+QPushButton#OrbitRecentNewButton:hover, QPushButton#OrbitRecentSearchButton:hover,
+QPushButton#OrbitRecentSearchButton:checked { background: __row_sel_b__; border-color: __split_handle_hover__; }
+QPushButton#OrbitRecentNewButton:focus, QPushButton#OrbitRecentSearchButton:focus {
+    background: __row_sel_b__; border-color: __org_split_hover__; }
+QPushButton#OrbitRecentNewButton:pressed, QPushButton#OrbitRecentSearchButton:pressed { background: __split_handle_hover__; }
+QLineEdit#OrbitConversationSearch { background: __attach_bg__; border: 1px solid __chat_bubble_a_b__;
+    border-radius: 9px; min-height: 24px; padding: 3px 9px; font-size: 9pt; }
+QLineEdit#OrbitConversationSearch:focus { border-color: __org_split_hover__; background: __card__; }
+QFrame#OrbitConversationRow { border: 1px solid transparent; border-left: 3px solid transparent;
+    border-radius: 11px; background: transparent; }
+QFrame#OrbitConversationRow:hover { background: __dropzone__; border-color: transparent; }
+QFrame#OrbitConversationRow[selected="true"] { background: __row_hover_b__;
+    border-color: transparent; border-left-color: __purple__; }
+QLabel#OrbitConversationIcon { background: __popup_sel_bg__; border: 0; border-radius: 9px; }
+QLabel#OrbitConversationTitle { color: __attach_btn__; background: transparent; border: 0; font-size: 9pt; font-weight: 500; }
+QFrame#OrbitConversationRow[selected="true"] QLabel#OrbitConversationTitle { color: __purple_text__; font-weight: 600; }
+QLabel#OrbitConversationActivity { color: __placeholder__; border: 0; background: transparent; font-size: 8pt; }
+QToolButton#OrbitConversationMore { border: 0; background: transparent; border-radius: 8px; padding: 0; }
+QToolButton#OrbitConversationMore:focus { color: __purple_text__; background: __purple_border__; }

@@ -78,12 +78,16 @@ def _convert_workbook(source: Path, key: str, staging: Path, progress: Progress,
     workbook = load_workbook(source, read_only=True, data_only=True, keep_links=False)
     try:
         sheets: dict[str, list[list[object]]] = {}
+        cells = 0
         for index, sheet in enumerate(workbook):
+            if (sheet.max_row or 0) > 50000 or (sheet.max_column or 0) > 200:
+                raise ConversionError("表格声明的尺寸超过每表 50000 行 / 200 列限制。")
             rows = []
             for row in sheet.iter_rows(values_only=True):
                 check_cancel(cancel)
-                if len(rows) >= 50000 or len(row) > 200:
-                    raise ConversionError("表格超过每表 50000 行 / 200 列限制。")
+                cells += len(row)
+                if len(rows) >= 50000 or len(row) > 200 or cells > 500000:
+                    raise ConversionError("表格超过行列或总计 50 万单元格限制。")
                 rows.append(list(row))
             sheets[sheet.title] = rows
             progress(index + 1, len(workbook.worksheets))

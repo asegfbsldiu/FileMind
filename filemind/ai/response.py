@@ -1,10 +1,10 @@
 """Validate structured AI suggestions without accepting model-supplied paths."""
 
 import json
-from pathlib import Path
 from typing import Any
 
-from filemind.core.planner import validate_category, validate_file_name, validate_relative_subdirectory
+from filemind.core.planner import (name_suffixes, validate_category, validate_file_name,
+                                   validate_relative_subdirectory)
 from filemind.models import FileInfo, FileSuggestion
 
 
@@ -100,7 +100,41 @@ def _parse_file_item(
 
 
 def _suffixes(file_name: str) -> tuple[str, ...]:
-    return tuple(Path(file_name).suffixes)
+    return name_suffixes(file_name)
+
+
+def parse_partial_file_suggestions(response_text: str, expected_files: dict[str, FileInfo],
+                                   rename_enabled: bool) -> tuple[dict[str, FileSuggestion], dict[str, str]]:
+    """Isolate bad rows while retaining strict field, path and rename validation."""
+    if len(response_text.encode("utf-8")) > MAX_RESPONSE_BYTES:
+        raise ValueError("模型返回内容超过大小限制")
+    try:
+        payload = json.loads(response_text)
+    except json.JSONDecodeError as error:
+        raise ValueError("模型返回的内容不是合法 JSON") from error
+    if (not isinstance(payload, dict) or set(payload) != {"suggestions"}
+            or not isinstance(payload["suggestions"], list)):
+        raise ValueError("模型返回格式必须包含 suggestions 数组")
+    suggestions: dict[str, FileSuggestion] = {}
+    failures: dict[str, str] = {}
+    for item in payload["suggestions"]:
+        identifier = item.get("file_id") if isinstance(item, dict) else None
+        if not isinstance(identifier, str) or identifier not in expected_files:
+            continue
+        if identifier in suggestions or identifier in failures:
+            suggestions.pop(identifier, None)
+            failures[identifier] = "模型重复返回该文件 ID，请重新确认建议"
+            continue
+        normalized = {"target_subdirectory": "", "new_name": None, "reason": "AI 分类建议", **item}
+        if normalized["target_subdirectory"] is None:
+            normalized["target_subdirectory"] = ""
+        try:
+            suggestions[identifier] = _parse_file_item(normalized, expected_files, rename_enabled)
+        except ValueError:
+            failures[identifier] = "该文件的 AI 建议未通过本地格式、路径或文件名校验"
+    for identifier in expected_files.keys() - suggestions.keys() - failures.keys():
+        failures[identifier] = "模型未返回该文件的有效建议"
+    return suggestions, failures
 
 
 def _parse_item(item: Any, expected_names: set[str]) -> FileSuggestion:
@@ -116,8 +150,8 @@ def _parse_item(item: Any, expected_names: set[str]) -> FileSuggestion:
     reason = item["reason"].strip()
     if not reason:
         raise ValueError("整理理由不能为空")
-    original_suffix = "".join(Path(file_name).suffixes)
-    suggested_suffix = "".join(Path(new_name).suffixes)
+    original_suffix = "".join(name_suffixes(file_name))
+    suggested_suffix = "".join(name_suffixes(new_name))
     if suggested_suffix != original_suffix:
         raise ValueError(f"新文件名必须保留原扩展名：{file_name}")
     return FileSuggestion(file_name, category, new_name, reason)

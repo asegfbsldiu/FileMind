@@ -5,10 +5,7 @@ import os
 import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-# Windows 的 TEMP/TMP 可能是 8.3 短路径（例如 C:\Users\RUNNER~1\...），而应用内部会用
-# Path.resolve() 规范化成长路径，于是同一个目录在断言里出现两种写法。把测试临时目录的
-# 基准统一为规范化路径，断言仍然比较同一个真实目录，强度不变。
+# Windows CI may spell TEMP with 8.3 aliases while application paths are resolved.
 tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
 
 import pytest
@@ -17,9 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 
 class ReversibleTestProtector:
-    """Deterministic stand-in for an OS token protector; never a real cipher."""
-
-    __test__ = False
+    """Deterministic test double, never a replacement for production encryption."""
 
     def protect(self, data: bytes) -> bytes:
         return bytes(value ^ 73 for value in data)
@@ -30,7 +25,7 @@ class ReversibleTestProtector:
 
 @pytest.fixture
 def test_protector() -> ReversibleTestProtector:
-    """Let remember-unlock flows run on platforms without DPAPI."""
+    """Exercise token lifecycle on every platform without real user credentials."""
     return ReversibleTestProtector()
 
 
@@ -40,7 +35,10 @@ def qt_application_lifecycle():
     application = QApplication.instance() or QApplication([])
     yield application
     assert QThreadPool.globalInstance().waitForDone(8000), "Qt 测试后台任务未正常结束"
-    for widget in QApplication.topLevelWidgets():
+    # Qt.Popup windows are top-level surfaces but still owned by their parent.
+    # Queueing both for deletion can destroy a combo's popup before hideEvent.
+    roots = [widget for widget in QApplication.topLevelWidgets() if widget.parent() is None]
+    for widget in roots:
         widget.close()
         widget.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

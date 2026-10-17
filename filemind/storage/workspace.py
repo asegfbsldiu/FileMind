@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import unicodedata
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from threading import RLock
@@ -19,6 +20,20 @@ class WorkspaceError(RuntimeError):
     """Safe-to-display local layout or avatar error."""
 
 
+def validate_user_name(value: str) -> str:
+    """Normalize a local display name and reject empty or multiline names."""
+    if not isinstance(value, str):
+        raise WorkspaceError("请输入有效的用户名。")
+    name = value.strip()
+    if not name:
+        raise WorkspaceError("用户名不能为空。")
+    if len(name) > 32:
+        raise WorkspaceError("用户名最多 32 个字符。")
+    if any(unicodedata.category(character) in {"Cc", "Cs", "Zl", "Zp"} for character in name):
+        raise WorkspaceError("用户名不能包含换行或控制字符。")
+    return name
+
+
 @dataclass(frozen=True)
 class WorkspacePreferences:
     """Non-secret local presentation settings, independent of API credentials."""
@@ -27,6 +42,8 @@ class WorkspacePreferences:
     sidebar_collapsed: bool = False
     avatar_file: str = ""
     organizer_height: int = 246
+    reduced_motion: bool = False
+    user_name: str = "本机用户"
 
 
 class WorkspaceStore:
@@ -51,7 +68,9 @@ class WorkspaceStore:
                     min(380, max(230, int(data.get("sidebar_width", 252)))),
                     data.get("sidebar_collapsed") is True,
                     "avatar.png" if data.get("avatar_file") == "avatar.png" else "",
-                    min(600, max(140, int(data.get("organizer_height", 246)))))
+                    min(600, max(140, int(data.get("organizer_height", 246)))),
+                    data.get("reduced_motion") is True,
+                    validate_user_name(data.get("user_name", "本机用户")))
                 return self._value
             except (OSError, ValueError, TypeError, AttributeError) as error:
                 raise WorkspaceError("界面布局配置无法读取，请检查本机配置目录。") from error
@@ -74,6 +93,18 @@ class WorkspaceStore:
         """Remember the user's rule-panel height separately from sidebar width."""
         with self._lock:
             self._write(replace(self.load(), organizer_height=min(600, max(140, height))))
+
+    def save_reduced_motion(self, reduced: bool) -> None:
+        """Remember the avatar motion preference with other local UI choices."""
+        with self._lock:
+            self._write(replace(self.load(), reduced_motion=reduced))
+
+    def save_user_name(self, user_name: str) -> str:
+        """Save the local display name while retaining all other UI preferences."""
+        name = validate_user_name(user_name)
+        with self._lock:
+            self._write(replace(self.load(), user_name=name))
+        return name
 
     def save_avatar(self, source: Path) -> Path:
         """Decode a selected raster and keep a small local PNG without metadata."""

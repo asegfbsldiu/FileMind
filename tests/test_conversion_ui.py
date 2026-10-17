@@ -14,11 +14,10 @@ from tools.review_ui import build_review
 
 
 def wait_for_conversion(page: ConversionPage) -> None:
-    # 与工作区测试一致：共享运行器上放宽预算，任务不结束仍然会失败。
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + 5
     while page.is_busy and time.monotonic() < deadline:
         QTest.qWait(10)
-    assert not page.is_busy, "转换任务未在等待时间内结束"
+    assert not page.is_busy
     QApplication.processEvents()
 
 
@@ -62,7 +61,7 @@ def test_background_inspection_remains_responsive_and_cancel_discards_result(tmp
     timer.start(5)
     with patch.object(conversion_page, "inspect_input", side_effect=slow_inspection):
         page.select_file(str(source))
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 2
         while not entered.is_set() and time.monotonic() < deadline:
             QTest.qWait(10)
         assert entered.is_set()
@@ -130,7 +129,7 @@ def test_close_waits_for_conversion_to_stop_safely(tmp_path: Path) -> None:
 
     with patch("filemind.ui.pages.conversion_page.inspect_input", side_effect=stoppable):
         window.conversion_page.select_file(str(tmp_path / "fixture.txt"))
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 2
         while not entered.is_set() and time.monotonic() < deadline:
             QTest.qWait(10)
         assert entered.is_set()
