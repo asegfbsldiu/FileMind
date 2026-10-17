@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from filemind.core.classifier import classify_file
 from filemind.core.executor import execute_plan, undo_record
@@ -10,7 +11,7 @@ from filemind.core.planner import build_plan
 from filemind.core.scanner import scan_files
 from filemind.ai.schemas import file_metadata
 from filemind.models import FileSuggestion
-from filemind.storage.history import OperationHistory
+from filemind.storage.history import OperationHistory, OperationJournal
 
 
 class ExecutorTests(unittest.TestCase):
@@ -168,18 +169,18 @@ class ExecutorTests(unittest.TestCase):
             source.write_text("content", encoding="utf-8")
             history = OperationHistory(root)
             plan = build_plan(root, scan_files(root), classify_file)
-            original_save = history.save
-            save_calls = 0
+            original_write = OperationJournal.write
+            write_calls = 0
 
-            def fail_after_move(record) -> None:
-                nonlocal save_calls
-                save_calls += 1
-                if save_calls == 3:
+            def fail_after_move(journal, entry) -> None:
+                nonlocal write_calls
+                write_calls += 1
+                if write_calls == 2:  # 第一次是 pending，第二次是移动后的结果
                     raise OSError("disk full")
-                original_save(record)
+                original_write(journal, entry)
 
-            history.save = fail_after_move
-            result = execute_plan(plan, history, confirmed=True)
+            with patch.object(OperationJournal, "write", fail_after_move):
+                result = execute_plan(plan, history, confirmed=True)
 
             self.assertEqual((result.succeeded, result.failed), (0, 1))
             self.assertTrue(source.exists())

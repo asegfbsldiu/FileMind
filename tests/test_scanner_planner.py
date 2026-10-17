@@ -57,5 +57,34 @@ def _result(category: str) -> ClassificationResult:
     return ClassificationResult(category, "test")
 
 
+def test_plan_validates_each_target_directory_once(monkeypatch, tmp_path: Path) -> None:
+    for index in range(50):
+        (tmp_path / f"文件{index:02d}.txt").write_text("", encoding="utf-8")
+    calls: list[Path] = []
+    from filemind.core import planner
+
+    original = planner._validate_target_directory
+
+    def counting(root: Path, directory: Path) -> None:
+        calls.append(directory)
+        original(root, directory)
+
+    monkeypatch.setattr("filemind.core.planner._validate_target_directory", counting)
+    plan = build_plan(tmp_path, scan_files(tmp_path), classify_file)
+
+    assert len(plan.operations) == 50
+    assert calls == [tmp_path / "文档"]
+
+
+def test_category_path_that_is_an_existing_file_still_warns(tmp_path: Path) -> None:
+    (tmp_path / "notes.txt").write_text("", encoding="utf-8")
+    (tmp_path / "文档").write_text("not a directory", encoding="utf-8")
+
+    plan = build_plan(tmp_path, scan_files(tmp_path), classify_file)
+    first = plan.operations[0]
+
+    assert "非目录文件" in (first.warning or "")
+
+
 if __name__ == "__main__":
     unittest.main()

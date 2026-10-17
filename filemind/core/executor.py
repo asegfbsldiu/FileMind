@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from filemind.core.planner import validate_file_name
 from filemind.models import OperationPlan, OperationRecord, PlannedOperation
-from filemind.storage.history import OperationHistory
+from filemind.storage.history import OperationHistory, OperationJournal
 
 
 MoveFile = Callable[[Path, Path], None]
@@ -62,34 +62,35 @@ def execute_plan(
         return ExecutionResult(cancelled=True)
 
     record = OperationRecord.create(uuid4().hex, plan.root)
-    history.save(record)
     result = ExecutionResult()
     total = len(plan.operations)
-    for index, operation in enumerate(plan.operations, start=1):
-        if cancel_event and cancel_event.is_set():
-            result.cancelled = True
-            break
-        entry = _operation_entry(operation)
-        record.operations.append(entry)
-        history.save(record)
-        _apply_operation(plan.root, operation, entry, record, history, move_file, result)
-        if on_progress:
-            on_progress(index, total)
+    with history.journal(record) as journal:
+        for index, operation in enumerate(plan.operations, start=1):
+            if cancel_event and cancel_event.is_set():
+                result.cancelled = True
+                break
+            entry = _operation_entry(operation)
+            record.operations.append(entry)
+            journal.write(entry)
+            _apply_operation(plan.root, operation, entry, journal, move_file, result)
+            if on_progress:
+                on_progress(index, total)
+    history.save(record)
     return result
 
 
 def _apply_operation(root: Path, operation: PlannedOperation, entry: dict[str, object],
-                     record: OperationRecord, history: OperationHistory,
+                     journal: OperationJournal,
                      move_file: MoveFile, result: ExecutionResult) -> None:
     """Persist an explicit skip or delegate one checked move to the journal."""
     skip_reason = _skip_reason(operation)
     if skip_reason is not None:
         entry.update(status="skipped", skip_reason=skip_reason)
-        history.save(record)
+        journal.write(entry)
         result.skipped += 1
         result.skip_reasons.append(f"{operation.source.name}：{skip_reason}")
         return
-    failure = _execute_one(root, operation, entry, record, history, move_file)
+    failure = _execute_one(root, operation, entry, journal, move_file)
     if failure:
         result.failures.append(failure)
         result.failed += 1
@@ -123,22 +124,24 @@ def undo_record(
     if record.undone:
         return ExecutionResult()
     result = ExecutionResult()
-    for entry in reversed(record.operations):
-        if cancel_event and cancel_event.is_set():
-            result.cancelled = True
-            break
-        if entry.get("status") != "success" or entry.get("undo_status") == "success":
-            continue
-        source = Path(str(entry["to"]))
-        target = Path(str(entry["from"]))
-        failure = _undo_one(history, source, target, entry, record, move_file)
-        if failure:
-            result.failures.append(failure)
-            result.failed += 1
-        else:
-            result.succeeded += 1
+    with history.journal(record) as journal:
+        for entry in reversed(record.operations):
+            if cancel_event and cancel_event.is_set():
+                result.cancelled = True
+                break
+            if entry.get("status") != "success" or entry.get("undo_status") == "success":
+                continue
+            source = Path(str(entry["to"]))
+            target = Path(str(entry["from"]))
+            failure = _undo_one(history.root, source, target, entry, journal, move_file)
+            if failure:
+                result.failures.append(failure)
+                result.failed += 1
+            else:
+                result.succeeded += 1
     successful_moves = [item for item in record.operations if item.get("status") == "success"]
-    record.undone = bool(successful_moves) and all(item.get("undo_status") == "success" for item in successful_moves)
+    record.undone = bool(successful_moves) and all(
+        item.get("undo_status") == "success" for item in successful_moves)
     history.save(record)
     return result
 
@@ -147,8 +150,7 @@ def _execute_one(
     root: Path,
     operation: PlannedOperation,
     entry: dict[str, object],
-    record: OperationRecord,
-    history: OperationHistory,
+    journal: OperationJournal,
     move_file: MoveFile,
 ) -> str | None:
     moved = False
@@ -166,48 +168,48 @@ def _execute_one(
         moved = True
         target_stat = operation.target.stat(follow_symlinks=False)
         entry.update(status="success", size_bytes=target_stat.st_size, modified_ns=target_stat.st_mtime_ns)
-        history.save(record)
+        journal.write(entry)
         return None
     except (OSError, ValueError) as error:
         rollback_error = _rollback_if_moved(operation.target, operation.source, move_file) if moved else ""
         message = f"{error}{rollback_error}"
         entry.update(status="failed", error=message)
         try:
-            history.save(record)
+            journal.write(entry)
         except OSError as log_error:
             message += f"；错误日志也无法保存：{log_error}"
         return f"{operation.source.name}：{message}"
 
 
 def _undo_one(
-    history: OperationHistory,
+    root: Path,
     source: Path,
     target: Path,
     entry: dict[str, object],
-    record: OperationRecord,
+    journal: OperationJournal,
     move_file: MoveFile,
 ) -> str | None:
     moved = False
     try:
-        _validate_move_paths(history.root, source, target, undo=True)
+        _validate_move_paths(root, source, target, undo=True)
         if target.exists():
             raise FileExistsError(f"原位置已有文件，未覆盖：{target}")
         current_stat = source.stat(follow_symlinks=False)
         if current_stat.st_size != entry.get("size_bytes") or current_stat.st_mtime_ns != entry.get("modified_ns"):
             raise ValueError(f"文件整理后发生变化，未撤销：{source}")
         entry.update(undo_status="pending", undo_error="")
-        history.save(record)
+        journal.write(entry)
         move_file(source, target)
         moved = True
         entry.update(undo_status="success", undo_error="")
-        history.save(record)
+        journal.write(entry)
         return None
     except (OSError, ValueError, KeyError) as error:
         rollback_error = _rollback_if_moved(target, source, move_file) if moved else ""
         message = f"{error}{rollback_error}"
         entry.update(undo_status="failed", undo_error=message)
         try:
-            history.save(record)
+            journal.write(entry)
         except OSError as log_error:
             message += f"；错误日志也无法保存：{log_error}"
         return f"{source.name}：{message}"

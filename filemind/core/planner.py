@@ -130,6 +130,8 @@ def assemble_plan(
     selected_root = _selected_root(root)
     operations: list[PlannedOperation] = []
     seen_targets: set[str] = set()
+    checked_directories: set[Path] = set()
+    parents_ok_cache: dict[Path, bool] = {}
     for entry in entries:
         source = _validated_source(selected_root, entry.source)
         category = validate_category(entry.category)
@@ -137,7 +139,13 @@ def assemble_plan(
         subdirectory = validate_relative_subdirectory(entry.target_subdirectory)
         if subdirectory:
             target_directory = target_directory.joinpath(*subdirectory.split("/"))
-        _validate_target_directory(selected_root, target_directory)
+        if target_directory not in checked_directories:
+            _validate_target_directory(selected_root, target_directory)
+            checked_directories.add(target_directory)
+        parents_ok = parents_ok_cache.get(target_directory)
+        if parents_ok is None:
+            parents_ok = _directory_chain_ok(target_directory)
+            parents_ok_cache[target_directory] = parents_ok
         requested_name = entry.new_name or source.name
         if name_suffixes(requested_name) != name_suffixes(source.name):
             raise ValueError(f"新文件名必须保留原扩展名：{source.suffix or '无扩展名'}")
@@ -153,7 +161,7 @@ def assemble_plan(
             source=source, target=target, original_name=source.name, new_name=new_name,
             classification=classification, size_bytes=entry.size_bytes,
             modified_ns=entry.modified_ns,
-            warning=plan_warning(target, entry.review_note),
+            warning=plan_warning(target, entry.review_note, parents_ok),
             excluded=entry.excluded, requested_name=requested_name, review_note=entry.review_note))
     return OperationPlan(selected_root, tuple(operations))
 
@@ -195,13 +203,29 @@ def _selected_root(root: Path) -> Path:
 
 
 def _validated_source(root: Path, path: Path) -> Path:
-    """Accept a regular file directly inside the selected root; never a symlink."""
+    """Accept a regular file directly inside the selected root; never a symlink.
+
+    The scanner builds paths from the already-resolved root, so the common case needs
+    no second canonicalisation; anything else still goes through ``resolve``.
+    """
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"源文件不是普通文件或是符号链接：{path}")
+    if path.parent == root:
+        return path
     source = path.resolve(strict=True)
     if source.parent != root:
         raise ValueError(f"源文件不在所选目录顶层：{path}")
     return source
+
+
+def _directory_chain_ok(directory: Path) -> bool:
+    """Whether no ancestor of this destination is an existing non-directory file."""
+    for candidate in (directory, *directory.parents):
+        if candidate == candidate.anchor:
+            continue
+        if candidate.exists() and not candidate.is_dir():
+            return False
+    return True
 
 
 def _validate_target_directory(root: Path, target_directory: Path) -> None:
@@ -225,7 +249,7 @@ def _safe_directory_chain(root: Path, directory: Path) -> bool:
     return True
 
 
-def plan_warning(target: Path, review_note: str = "") -> str | None:
+def plan_warning(target: Path, review_note: str = "", parents_ok: bool = True) -> str | None:
     """Return the reason this target cannot run, or ``None`` when it is safe."""
     if review_note:
         return f"{review_note}；尚未确认，执行时会跳过"
@@ -233,6 +257,6 @@ def plan_warning(target: Path, review_note: str = "") -> str | None:
         return "目标路径是符号链接，不能执行"
     if target.exists():
         return "目标位置已存在同名文件，执行时会跳过"
-    if any(parent.exists() and not parent.is_dir() for parent in target.parents if parent != target.anchor):
+    if not parents_ok:
         return "目标路径的上级位置已存在非目录文件"
     return None
